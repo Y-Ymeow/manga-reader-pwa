@@ -35,6 +35,8 @@ function createHackedFetch(): typeof fetch {
         response = await requestManager.request({ url, method: method as any, data: body, headers });
       }
 
+      console.log(response);
+
       // 构造兼容的 Response 对象
       const responseBody = typeof response.data === 'string'
         ? response.data

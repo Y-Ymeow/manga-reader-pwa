@@ -62,6 +62,36 @@ export class FetchAdapter implements IRequestAdapter {
     response: Response,
     responseType?: string
   ): Promise<T> {
+    if (!responseType)  {
+      if (response.headers.get('content-type')?.includes('application/json')) {
+        responseType = 'json';
+      }
+
+      if (response.headers.get('content-type')?.includes('text/plain')) {
+        responseType = 'text';
+      }
+
+      if (response.headers.get('content-type')?.includes('text/html')) {
+        responseType = 'text';
+      }
+
+      if (response.headers.get('content-type')?.includes('image/')) {
+        responseType = 'blob';
+      }
+
+      if (response.headers.get('content-type')?.includes('application/octet-stream')) {
+        responseType = 'arraybuffer';
+      }
+
+      if (response.headers.get('content-type')?.includes('application/x-www-form-urlencoded')) {
+        responseType = 'form';
+      }
+
+      if (response.headers.get('content-type')?.includes('multipart/form-data')) {
+        responseType = 'form';
+      }
+    }
+
     if (responseType === 'text') {
       return response.text() as Promise<T>;
     }
@@ -107,7 +137,7 @@ export class FetchAdapter implements IRequestAdapter {
         signal: controller.signal,
       });
 
-      clearTimeout(timeoutId);
+      clearTimeout(timeoutId); 
 
       if (!response.ok) {
         let errorData: unknown;
@@ -128,6 +158,7 @@ export class FetchAdapter implements IRequestAdapter {
       }
 
       const data = await this.parseResponse<T>(response, config.responseType);
+      console.log(data);
 
       return {
         data,
@@ -138,6 +169,7 @@ export class FetchAdapter implements IRequestAdapter {
       };
     } catch (error) {
       clearTimeout(timeoutId);
+      console.log(error);
 
       if (error instanceof RequestError) {
         throw error;

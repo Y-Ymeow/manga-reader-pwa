@@ -3,7 +3,7 @@
 import { createAutoExternalAdapter, FetchAdapter, RequestManager } from "@/framework/requests";
 
 
-export const requestManager = new RequestManager();
+const requestManager = new RequestManager();
 
 // 优先注册外部适配器（油猴/Chrome插件）以绕过 CORS
 const externalAdapter = createAutoExternalAdapter();
@@ -13,7 +13,10 @@ if (externalAdapter) {
 } else {
   // 降级到 fetch
   requestManager.register(new FetchAdapter());
+  console.log('request')
 }
+
+export {requestManager};
 
 // Venera 格式: Network.get(url, { headers: {...}, ... })
 export class NetworkClass {
@@ -35,6 +38,7 @@ export class NetworkClass {
         }
       }
       const response = await requestManager.get(url, { headers });
+      console.log(response);
       return {
         status: response.status,
         body: typeof response.data === 'string' ? response.data : JSON.stringify(response.data),

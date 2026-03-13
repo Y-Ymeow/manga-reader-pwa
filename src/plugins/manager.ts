@@ -39,7 +39,6 @@ export async function debugPluginStorage(): Promise<void> {
 
     for (const key of keys) {
       const code = await loadPluginCode(key);
-      console.debug(code);
     }
   } catch (e) {
     console.error(e);
