@@ -1,0 +1,523 @@
+/**
+ * External Adapter
+ * 用于连接外部请求接口（油猴脚本 GM_xmlhttpRequest / Chrome 插件 / 其他）
+ * 可以绕过浏览器的 CORS 限制
+ */
+
+import type {
+  IRequestAdapter,
+  RequestConfig,
+  ResponseData,
+  StreamChunk,
+  ExternalRequestInterface,
+  ExternalAdapterConfig,
+} from '../types';
+
+import { RequestError } from '../types';
+
+/**
+ * 油猴 GM_xmlhttpRequest 接口定义
+ */
+export interface GMXmlHttpRequest {
+  (details: {
+    method?: string;
+    url: string;
+    headers?: Record<string, string>;
+    data?: string;
+    timeout?: number;
+    responseType?: string;
+    onload?: (response: {
+      status: number;
+      statusText: string;
+      responseText: string;
+      responseHeaders: string;
+    }) => void;
+    onerror?: (error: unknown) => void;
+    ontimeout?: () => void;
+    onabort?: () => void;
+    onreadystatechange?: (response: { readyState: number }) => void;
+  }): { abort: () => void };
+}
+
+/**
+ * Chrome 运行时接口
+ */
+export interface ChromeRuntime {
+  lastError?: { message: string };
+  sendMessage: (
+    extensionIdOrMessage: string | unknown,
+    messageOrCallback?: unknown | ((response: unknown) => void),
+    callback?: (response: unknown) => void
+  ) => void;
+  onMessage: {
+    addListener: (callback: (message: unknown, sender: unknown, sendResponse: (response: unknown) => void) => void) => void;
+  };
+  onConnect: {
+    addListener: (callback: (port: unknown) => void) => void;
+  };
+}
+
+/**
+ * Chrome 接口
+ */
+export interface ChromeGlobal {
+  runtime?: ChromeRuntime;
+}
+
+/**
+ * Chrome 插件消息接口（导出用于类型兼容）
+ */
+export interface ChromeExtensionInterface {
+  sendMessage: (
+    message: {
+      type: 'request';
+      config: RequestConfig;
+    },
+    callback: (response: {
+      success: boolean;
+      data?: unknown;
+      status?: number;
+      statusText?: string;
+      headers?: Record<string, string>;
+      error?: string;
+    }) => void
+  ) => void;
+}
+
+/**
+ * 外部适配器 - 用于连接油猴脚本或 Chrome 插件提供的请求接口
+ */
+export class ExternalAdapter implements IRequestAdapter {
+  readonly name: string;
+  private config: ExternalAdapterConfig;
+  private interface: ExternalRequestInterface | null = null;
+
+  constructor(config: ExternalAdapterConfig) {
+    this.config = config;
+    this.name = config.name || 'external';
+  }
+
+  /**
+   * 检查外部接口是否可用
+   */
+  isSupported(): boolean {
+    const iface = this.config.getInterface();
+    return !!iface && typeof iface.request === 'function';
+  }
+
+  /**
+   * 初始化 - 尝试获取外部接口
+   */
+  async init(): Promise<void> {
+    const iface = this.config.getInterface();
+    if (!iface) {
+      throw new RequestError('External request interface not available', {
+        isNetworkError: true,
+      });
+    }
+    this.interface = iface;
+  }
+
+  /**
+   * 确保已初始化
+   */
+  private ensureInitialized(): ExternalRequestInterface {
+    if (!this.interface) {
+      const iface = this.config.getInterface();
+      if (!iface) {
+        throw new RequestError('External request interface not initialized', {
+          isNetworkError: true,
+        });
+      }
+      this.interface = iface;
+    }
+    return this.interface;
+  }
+
+  /**
+   * 发送请求
+   */
+  async request<T = unknown>(config: RequestConfig): Promise<ResponseData<T>> {
+    const iface = this.ensureInitialized();
+
+    try {
+      const response = await iface.request(config);
+      let data = response.data;
+
+      // 处理 base64 编码的 arraybuffer（Chrome 扩展传递）
+      if (
+        data &&
+        typeof data === 'object' &&
+        (data as any).__type === 'base64' &&
+        typeof (data as any).data === 'string'
+      ) {
+        const base64 = (data as any).data;
+        const binary = atob(base64);
+        const arrayBuffer = new ArrayBuffer(binary.length);
+        const uint8Array = new Uint8Array(arrayBuffer);
+        for (let i = 0; i < binary.length; i++) {
+          uint8Array[i] = binary.charCodeAt(i);
+        }
+        data = arrayBuffer;
+      }
+
+      return {
+        data: data as T,
+        status: response.status,
+        statusText: response.statusText,
+        headers: response.headers,
+      };
+    } catch (error) {
+      if (error instanceof RequestError) {
+        throw error;
+      }
+
+      throw new RequestError(
+        error instanceof Error ? error.message : 'External request failed',
+        {
+          isNetworkError: true,
+          config,
+        }
+      );
+    }
+  }
+
+  /**
+   * 发送流式请求
+   */
+  async *stream(config: RequestConfig): AsyncIterableIterator<StreamChunk> {
+    const iface = this.ensureInitialized();
+
+    // 如果外部接口支持流式
+    if (iface.stream) {
+      yield* iface.stream(config);
+      return;
+    }
+
+    // 否则退回到普通请求并模拟流式
+    const response = await this.request<string>({
+      ...config,
+      responseType: 'text',
+    });
+
+    // 按行分割模拟流式
+    const lines = response.data.split('\n');
+    for (const line of lines) {
+      yield { data: line + '\n', done: false };
+    }
+    yield { data: '', done: true };
+  }
+}
+
+/**
+ * 获取油猴 GM_xmlhttpRequest 函数
+ */
+function getGMXmlHttpRequest(): GMXmlHttpRequest | undefined {
+  if (typeof window === 'undefined') return undefined;
+
+  const win = window as {
+    unsafeWindow?: { GM_xmlhttpRequest?: GMXmlHttpRequest };
+    GM_xmlhttpRequest?: GMXmlHttpRequest;
+  };
+
+  return win.unsafeWindow?.GM_xmlhttpRequest || win.GM_xmlhttpRequest;
+}
+
+/**
+ * 获取 AI Framework 请求桥接对象
+ */
+function getAIFrameworkBridge(): ExternalRequestInterface | undefined {
+  if (typeof window === 'undefined') return undefined;
+
+  const bridge = (window as any).__AI_FRAMEWORK_REQUEST_BRIDGE__;
+  if (bridge && typeof bridge.request === 'function') {
+    return bridge as ExternalRequestInterface;
+  }
+  return undefined;
+}
+
+/**
+ * 创建油猴适配器
+ * 自动检测 GM_xmlhttpRequest 并包装
+ */
+export function createGMAdapter(): ExternalAdapter | null {
+  const gmXHR = getGMXmlHttpRequest();
+  
+  if (!gmXHR) {
+    return null;
+  }
+
+  return new ExternalAdapter({
+    name: 'gm_xhr',
+    getInterface: () => {
+      return {
+        request: <T = unknown>(config: RequestConfig): Promise<ResponseData<T>> => {
+          return new Promise((resolve, reject) => {
+            const headers: Record<string, string> = {};
+
+            gmXHR({
+              method: config.method || 'GET',
+              url: buildURL(config.url, config.params),
+              headers: config.headers,
+              data: config.body ? JSON.stringify(config.body) : undefined,
+              timeout: config.timeout || 30000,
+              responseType: config.responseType === 'arraybuffer' ? 'arraybuffer' : 'text',
+              onload: (response) => {
+                // 解析响应头
+                const headerLines = (response.responseHeaders || '').split('\n');
+                for (const line of headerLines) {
+                  const [key, ...valueParts] = line.split(':');
+                  if (key && valueParts.length > 0) {
+                    headers[key.trim().toLowerCase()] = valueParts.join(':').trim();
+                  }
+                }
+
+                // 根据 responseType 获取正确的响应数据
+                let data: unknown;
+                if (config.responseType === 'arraybuffer') {
+                  // arraybuffer 响应使用 response 属性
+                  data = (response as any).response;
+                } else {
+                  data = response.responseText;
+                }
+
+                if (config.responseType === 'json' && typeof data === 'string') {
+                  try {
+                    data = JSON.parse(data);
+                  } catch {
+                    // 保持原样
+                  }
+                }
+
+                resolve({
+                  data: data as T,
+                  status: response.status,
+                  statusText: response.statusText,
+                  headers,
+                });
+              },
+              onerror: (error) => {
+                reject(new RequestError('GM request failed', {
+                  isNetworkError: true,
+                  response: error,
+                }));
+              },
+              ontimeout: () => {
+                reject(new RequestError('GM request timeout', {
+                  isTimeout: true,
+                }));
+              },
+            });
+          });
+        },
+
+        stream: async function* (config: RequestConfig): AsyncIterableIterator<StreamChunk> {
+          const controller = { aborted: false };
+
+          // 如果支持 signal
+          config.signal?.addEventListener('abort', () => {
+            controller.aborted = true;
+          });
+
+          const xhr = gmXHR({
+            method: config.method || 'POST',
+            url: buildURL(config.url, config.params),
+            headers: {
+              'Accept': 'text/event-stream',
+              ...config.headers,
+            },
+            data: config.body ? JSON.stringify(config.body) : undefined,
+            timeout: config.timeout || 30000,
+            responseType: 'text',
+            onreadystatechange: () => {
+              if (controller.aborted) {
+                xhr.abort();
+              }
+            },
+            onload: () => {
+              // 请求完成
+            },
+          });
+
+          // GM_xmlhttpRequest 不支持真正的流式，所以等待完成后返回
+          const response = await new Promise<ResponseData<string>>((resolve, reject) => {
+            gmXHR({
+              method: config.method || 'POST',
+              url: buildURL(config.url, config.params),
+              headers: {
+                'Accept': 'text/event-stream',
+                ...config.headers,
+              },
+              data: config.body ? JSON.stringify(config.body) : undefined,
+              timeout: config.timeout || 30000,
+              responseType: 'text',
+              onload: (res) => {
+                const hdrs: Record<string, string> = {};
+                const headerLines = (res.responseHeaders || '').split('\n');
+                for (const line of headerLines) {
+                  const [key, ...valueParts] = line.split(':');
+                  if (key && valueParts.length > 0) {
+                    hdrs[key.trim().toLowerCase()] = valueParts.join(':').trim();
+                  }
+                }
+                resolve({
+                  data: res.responseText,
+                  status: res.status,
+                  statusText: res.statusText,
+                  headers: hdrs,
+                });
+              },
+              onerror: reject,
+              ontimeout: () => reject(new Error('Timeout')),
+            });
+          });
+
+          // 模拟流式
+          const lines = response.data.split('\n');
+          for (const line of lines) {
+            if (controller.aborted) return;
+            yield { data: line + '\n', done: false };
+          }
+          yield { data: '', done: true };
+        },
+      };
+    },
+  });
+}
+
+/**
+ * 获取 Chrome 运行时
+ */
+function getChromeRuntime(): ChromeRuntime | undefined {
+  if (typeof window === 'undefined') return undefined;
+  const chrome = (window as { chrome?: ChromeGlobal }).chrome;
+  return chrome?.runtime;
+}
+
+/**
+ * 创建 Chrome 插件适配器
+ */
+export function createChromeAdapter(extensionId?: string): ExternalAdapter | null {
+  const runtime = getChromeRuntime();
+  
+  if (!runtime || !runtime.sendMessage) {
+    return null;
+  }
+
+  const sendMessage = extensionId
+    ? (msg: unknown, cb: (response: unknown) => void) => runtime.sendMessage!(extensionId, msg, cb)
+    : (msg: unknown, cb: (response: unknown) => void) => runtime.sendMessage!(msg, cb);
+
+  return new ExternalAdapter({
+    name: 'chrome_extension',
+    getInterface: () => {
+      return {
+        request: <T = unknown>(config: RequestConfig): Promise<ResponseData<T>> => {
+          return new Promise((resolve, reject) => {
+            sendMessage(
+              {
+                type: 'request',
+                config,
+              },
+              (response) => {
+                if (runtime.lastError) {
+                  reject(new RequestError(runtime.lastError.message, {
+                    isNetworkError: true,
+                  }));
+                  return;
+                }
+
+                const res = response as {
+                  success: boolean;
+                  data?: unknown;
+                  status?: number;
+                  statusText?: string;
+                  headers?: Record<string, string>;
+                  error?: string;
+                };
+
+                if (!res || !res.success) {
+                  reject(new RequestError(res?.error || 'Chrome extension request failed', {
+                    isNetworkError: true,
+                    response: res,
+                  }));
+                  return;
+                }
+
+                resolve({
+                  data: res.data as T,
+                  status: res.status || 200,
+                  statusText: res.statusText || 'OK',
+                  headers: res.headers || {},
+                });
+              }
+            );
+          });
+        },
+      };
+    },
+  });
+}
+
+/**
+ * 构建完整 URL
+ */
+function buildURL(url: string, params?: Record<string, unknown>): string {
+  if (!params || Object.keys(params).length === 0) {
+    return url;
+  }
+
+  const searchParams = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== null) {
+      searchParams.append(key, String(value));
+    }
+  }
+
+  const queryString = searchParams.toString();
+  if (!queryString) return url;
+
+  const separator = url.includes('?') ? '&' : '?';
+  return `${url}${separator}${queryString}`;
+}
+
+/**
+ * 创建 AI Framework 桥接适配器
+ */
+export function createAIFrameworkAdapter(): ExternalAdapter | null {
+  const bridge = getAIFrameworkBridge();
+  if (!bridge) {
+    return null;
+  }
+
+  return new ExternalAdapter({
+    name: 'ai_framework_bridge',
+    getInterface: () => bridge,
+  });
+}
+
+/**
+ * 自动检测并创建最佳外部适配器
+ */
+export function createAutoExternalAdapter(): ExternalAdapter | null {
+  // 优先尝试 AI Framework 桥接
+  const bridge = getAIFrameworkBridge();
+  if (bridge) {
+    return new ExternalAdapter({
+      name: 'external',
+      getInterface: () => bridge,
+    });
+  }
+
+  // 然后尝试油猴
+  if (getGMXmlHttpRequest()) {
+    return createGMAdapter();
+  }
+
+  // 最后尝试 Chrome 插件
+  if (getChromeRuntime()) {
+    return createChromeAdapter();
+  }
+
+  return null;
+}
