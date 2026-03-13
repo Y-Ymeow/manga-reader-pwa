@@ -5,6 +5,8 @@ import tailwindcss from '@tailwindcss/vite';
 import { VitePWA } from 'vite-plugin-pwa';
 
 export default defineConfig({
+  // GitHub Pages 项目页面需要设置基础路径
+  base: process.env.GITHUB_PAGES ? '/manga-reader-pwa/' : '/',
   plugins: [
     preact(),
     tailwindcss(),
@@ -64,16 +66,16 @@ export default defineConfig({
         background_color: '#1a1a2e',
         display: 'standalone',
         orientation: 'portrait',
-        scope: '/',
-        start_url: '/',
+        scope: '.',
+        start_url: '.',
         icons: [
           {
-            src: '/icons/icon-192x192.png',
+            src: 'icons/icon-192x192.png',
             sizes: '192x192',
             type: 'image/png'
           },
           {
-            src: '/icons/icon-512x512.png',
+            src: 'icons/icon-512x512.png',
             sizes: '512x512',
             type: 'image/png'
           }
