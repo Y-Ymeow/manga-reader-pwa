@@ -62,15 +62,20 @@ export function PluginSettings({ pluginKey }: PluginSettingsProps) {
     );
   }
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!plugin) return;
 
-    Object.entries(settings).forEach(([key, value]) => {
-      plugin.saveSetting(key, value);
-    });
+    try {
+      // 异步保存所有设置
+      for (const [key, value] of Object.entries(settings)) {
+        await plugin.saveSetting(key, value);
+      }
 
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (e: any) {
+      alert('保存失败：' + e.message);
+    }
   };
 
   const handleChange = (key: string, value: any) => {

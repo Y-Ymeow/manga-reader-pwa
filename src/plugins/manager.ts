@@ -20,6 +20,8 @@ import {
   saveSourceListUrl,
   getSourceListUrl,
   loadPluginSetting,
+  savePluginSetting,
+  loadAllPluginData,
 } from "./storage";
 
 // 插件存储
@@ -66,27 +68,16 @@ export function getPlugins(): PluginInstance[] {
 export async function getPlugin(
   key: string,
 ): Promise<PluginInstance | undefined> {
-  if (pluginInitialized[key]) {
-    return pluginInitialized[key];
-  }
-
   const plugin = plugins.get(key);
   if (!plugin) {
     return undefined;
   }
 
-  // 调用插件的 init 方法（如果存在且未初始化过）- 用于初始化插件状态
-  if (typeof (plugin as any).init === "function" && !pluginInitialized[key]) {
-    try {
-      console.log(`[Plugin] Initializing plugin: ${key}`);
-      await (plugin as any).init();
-      pluginInitialized[key] = plugin;
-    } catch (e) {
-      console.error(e);
-    }
+  if (typeof (plugin as any).init === "function") {
+    await (plugin as any).init();
   }
 
-  return pluginInitialized[key] ?? plugin;
+  return plugin;
 }
 
 /**
@@ -189,18 +180,58 @@ export async function loadPlugin(
   Object.assign(plugin, instance);
   plugin.loadSetting = instance.loadSetting.bind(instance);
   plugin.saveSetting = instance.saveSetting.bind(instance);
+  if (typeof (instance as any).init === "function") {
+    plugin.init = instance.init.bind(instance);
+  }
 
   // 从 IndexedDB 加载插件设置
   if (plugin.settings) {
+    let hasNewSettings = false;
+
     for (const key of Object.keys(plugin.settings)) {
       const value = await loadPluginSetting(plugin.key, key);
       if (value !== null && (instance as any)._loadSettingFromStorage) {
         (instance as any)._loadSettingFromStorage(key, value);
+        console.log(`[Plugin] Loaded setting: ${plugin.key}.${key} =`, value);
+      } else {
+        // 没有保存过的设置，使用默认值并保存
+        const defaultValue = plugin.settings[key]?.default;
+        if (
+          defaultValue !== undefined &&
+          (instance as any)._loadSettingFromStorage
+        ) {
+          (instance as any)._loadSettingFromStorage(key, defaultValue);
+          await savePluginSetting(plugin.key, key, defaultValue);
+          console.log(
+            `[Plugin] Saved default setting: ${plugin.key}.${key} =`,
+            defaultValue,
+          );
+          hasNewSettings = true;
+        }
       }
+    }
+
+    if (hasNewSettings) {
+      console.log(
+        `[Plugin] Initialized ${Object.keys(plugin.settings).length} settings for ${plugin.key}`,
+      );
     }
   }
 
-  // 存储插件
+  // 批量加载插件所有数据并注入
+  try {
+    const allData = await loadAllPluginData(plugin.key);
+    if (Object.keys(allData).length > 0) {
+      (instance as any)._loadDataFromStorage(allData);
+      console.log(
+        `[Plugin] Loaded ${Object.keys(allData).length} data entries for ${plugin.key}`,
+      );
+    }
+  } catch (e) {
+    console.warn(`[Plugin] Failed to load data for ${plugin.key}:`, e);
+  }
+
+  // 从存储恢复插件
   plugins.set(plugin.key, plugin);
 
   // 调用插件的 onLoad 回调（如果存在）- 用于恢复内部状态
@@ -430,14 +461,18 @@ async function doRestorePlugins(): Promise<void> {
 
 // ===== 图片加载处理 =====
 
-import { RequestManager, createAutoExternalAdapter, FetchAdapter } from '../framework/requests';
+import {
+  RequestManager,
+  createAutoExternalAdapter,
+  FetchAdapter,
+} from "../framework/requests";
 
 // 创建图片请求管理器（优先使用外部适配器绕过 CORS）
 const imageRequestManager = new RequestManager();
 const externalAdapter = createAutoExternalAdapter();
 if (externalAdapter) {
   imageRequestManager.register(externalAdapter);
-  imageRequestManager.setDefault('external');
+  imageRequestManager.setDefault("external");
 } else {
   imageRequestManager.register(new FetchAdapter());
 }
@@ -451,8 +486,12 @@ export async function processImageLoad(
   pluginKey: string,
   url: string,
   comicId: string,
-  epId: string
-): Promise<{ url: string; headers?: Record<string, string>; blobUrl?: string }> {
+  epId: string,
+): Promise<{
+  url: string;
+  headers?: Record<string, string>;
+  blobUrl?: string;
+}> {
   const plugin = await getPlugin(pluginKey);
   if (!plugin?.comic?.onImageLoad) {
     // 没有 onImageLoad，直接返回原URL
@@ -461,9 +500,12 @@ export async function processImageLoad(
 
   try {
     // 调用插件的 onImageLoad 获取配置
-    const config: ImageLoadingConfig = await plugin.comic.onImageLoad(url, comicId, epId);
+    const config: ImageLoadingConfig = await plugin.comic.onImageLoad(
+      url,
+      comicId,
+      epId,
+    );
 
-    console.log(config);
     if (!config) {
       return { url };
     }
@@ -471,15 +513,36 @@ export async function processImageLoad(
     // 处理后的URL（可能被插件修改）
     const finalUrl = config.url || url;
 
-    // 如果有 modifyImage，需要下载、修改并转换为 Blob URL
-    if (config.modifyImage) {
+    // 如果有 modifyImage 或 headers，需要下载并转换为 Blob URL
+    // 这样确保携带 referer 等 headers，并且可以利用缓存
+    if (config.modifyImage || config.headers) {
       try {
         // 使用 requestManager 下载图片（绕过 CORS）
         // 使用 arraybuffer 因为 GM adapter 不直接支持 blob
         const response = await imageRequestManager.get<ArrayBuffer>(finalUrl, {
           headers: config.headers,
-          responseType: 'arraybuffer',
+          responseType: "arraybuffer",
         });
+
+        // 检测 Cloudflare 挑战页面
+        if (response.status === 403 || response.status === 503) {
+          const responseText =
+            typeof response.data === "string" ? response.data : "";
+          if (
+            responseText.includes("cdn-cgi/challenge-platform") ||
+            responseText.includes("Just a moment") ||
+            responseText.includes("cf_chl")
+          ) {
+            console.log("[processImageLoad] Detected CF challenge");
+            // 触发全局 CF 挑战回调
+            import("../components/CfChallengeModal").then(
+              ({ triggerCfChallenge }) => {
+                triggerCfChallenge(finalUrl);
+              },
+            );
+            throw new Error(`CF_CHALLENGE:${finalUrl}`);
+          }
+        }
 
         if (response.status < 200 || response.status >= 300) {
           throw new Error(`Failed to load image: ${response.status}`);
@@ -488,20 +551,33 @@ export async function processImageLoad(
         // 将 arraybuffer 转换为 blob
         const blob = new Blob([response.data]);
 
-        // 使用 Canvas 加载图片
-        const originalImage = await CanvasImage.fromBlob(blob);
+        if (config.modifyImage) {
+          // 使用 Canvas 加载图片
+          const originalImage = await CanvasImage.fromBlob(blob);
 
-        // 执行 modifyImage 函数
-        // modifyImage 是一个字符串，包含函数定义
-        const modifyFunction = new Function('image', config.modifyImage + '\nreturn modifyImage(image);');
-        const modifiedImage = modifyFunction(originalImage);
+          // 执行 modifyImage 函数
+          // modifyImage 是一个字符串，包含函数定义
+          const modifyFunction = new Function(
+            "image",
+            config.modifyImage + "\nreturn modifyImage(image);",
+          );
+          const modifiedImage = modifyFunction(originalImage);
 
-        if (modifiedImage && modifiedImage instanceof CanvasImage) {
-          // 转换为 Blob URL
-          const mimeType = blob.type || 'image/png';
-          const modifiedBlob = await modifiedImage.toBlob(mimeType);
-          const blobUrl = URL.createObjectURL(modifiedBlob);
+          if (modifiedImage && modifiedImage instanceof CanvasImage) {
+            // 转换为 Blob URL
+            const mimeType = blob.type || "image/png";
+            const modifiedBlob = await modifiedImage.toBlob(mimeType);
+            const blobUrl = URL.createObjectURL(modifiedBlob);
 
+            return {
+              url: finalUrl,
+              headers: config.headers,
+              blobUrl,
+            };
+          }
+        } else {
+          // 没有 modifyImage，但有 headers，直接返回 Blob URL
+          const blobUrl = URL.createObjectURL(blob);
           return {
             url: finalUrl,
             headers: config.headers,
@@ -509,19 +585,16 @@ export async function processImageLoad(
           };
         }
       } catch (e) {
-        console.error('[processImageLoad] Failed to modify image:', e);
-        // 修改失败，返回原始URL
+        console.error("[processImageLoad] Failed to download/modify image:", e);
+        // 修改失败，返回原始 URL
         return { url: finalUrl, headers: config.headers };
       }
     }
 
-    // 没有 modifyImage，只返回 URL 和 headers
-    return {
-      url: finalUrl,
-      headers: config.headers,
-    };
+    // 没有 modifyImage 和 headers，只返回 URL
+    return { url: finalUrl };
   } catch (e) {
-    console.error('[processImageLoad] Error:', e);
+    console.error("[processImageLoad] Error:", e);
     return { url };
   }
 }
@@ -530,7 +603,7 @@ export async function processImageLoad(
  * 清理图片 Blob URL
  */
 export function revokeImageBlobUrl(blobUrl: string): void {
-  if (blobUrl && blobUrl.startsWith('blob:')) {
+  if (blobUrl && blobUrl.startsWith("blob:")) {
     URL.revokeObjectURL(blobUrl);
   }
 }
@@ -544,12 +617,13 @@ export async function searchManga(
   pluginKey: string,
   keyword: string,
   page: number = 1,
+  options: string[] = [],
 ): Promise<{ comics: Comic[]; maxPage?: number }> {
   const plugin = await getPlugin(pluginKey);
   if (!plugin?.search) {
     throw new Error("Plugin does not support search");
   }
-  return plugin.search.load(keyword, [], page);
+  return plugin.search.load(keyword, options, page);
 }
 
 /**
@@ -633,14 +707,14 @@ export async function getChapterImages(
   }
 
   if (chapterId?.includes("/")) {
-    chapterId = chapterId.replace(new RegExp("\/" + comicId + '$'), '');
+    chapterId = chapterId.replace(new RegExp("\/" + comicId + "$"), "");
   }
 
   // 尝试方式 2: comic.loadEp (返回 { images: string[] })
   if (plugin.comic?.loadEp) {
     const result = await plugin.comic.loadEp(comicId, chapterId);
     if (result && Array.isArray(result.images)) {
-      console.log('[processImageUrls] Loaded images:', result.images.length);
+      console.log("[processImageUrls] Loaded images:", result.images.length);
       return result.images;
     }
     throw new Error("Plugin loadEp returned invalid format");
@@ -659,7 +733,6 @@ export async function getCategoryData(
   if (!plugin?.category) {
     return null;
   }
+  console.log(plugin.category);
   return plugin.category;
 }
-
-

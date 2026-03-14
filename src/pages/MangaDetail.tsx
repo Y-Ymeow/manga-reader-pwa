@@ -14,7 +14,7 @@ import { getCacheIndex } from "../fs/cache-index";
 import { requestManager } from "../plugins/runtimes/NetworkClass";
 import type { MangaRecord, CategoryRecord, ChapterListRecord } from "@db/index";
 import { waitForDatabase } from "@db/global";
-import { loadMangaCache, saveMangaCache } from "@plugins/storage";
+import { loadMangaCache, saveMangaCache, deleteMangaCache, deleteMangaCacheWithSuffix, clearPluginMangaCache, clearPluginData } from "@plugins/storage";
 
 interface MangaDetailProps {
   mangaId?: string;
@@ -81,7 +81,15 @@ export function MangaDetail({ mangaId }: MangaDetailProps) {
   const [error, setError] = useState("");
   const [categories, setCategories] = useState<CategoryRecord[]>([]);
   const [showCategorySelect, setShowCategorySelect] = useState(false);
-  const [chapterReverseOrder, setChapterReverseOrder] = useState(false);
+  const [chapterReverseOrder, setChapterReverseOrder] = useState(() => {
+    // 从 localStorage 读取上次的排序设置
+    try {
+      const stored = localStorage.getItem('manga_chapter_order');
+      return stored === 'reverse';
+    } catch {
+      return false;
+    }
+  });
   const [isUpdating, setIsUpdating] = useState(false);
   const [isCaching, setIsCaching] = useState(false);
   const [cacheProgress, setCacheProgress] = useState(0);
@@ -95,6 +103,18 @@ export function MangaDetail({ mangaId }: MangaDetailProps) {
   const [pluginKey, comicId] = isPluginManga
     ? [mangaId!.split(":")[0], mangaId!.split(":")[1]]
     : [null, null];
+
+  // 从数据库记录中获取插件信息（用于书架漫画）
+  const getPluginInfo = async () => {
+    if (isPluginManga && pluginKey && comicId) {
+      return { pluginKey, comicId };
+    }
+    // 书架漫画，从数据库记录获取
+    if (manga?.pluginId && manga.externalId) {
+      return { pluginKey: manga.pluginId, comicId: manga.externalId };
+    }
+    return null;
+  };
 
   useEffect(() => {
     if (!mangaId) {
@@ -337,10 +357,30 @@ export function MangaDetail({ mangaId }: MangaDetailProps) {
 
   // 更新漫画信息
   const handleUpdate = async () => {
-    if (!isPluginManga || !pluginKey || !comicId || !manga) return;
+    if (!manga) return;
 
+    // 获取插件信息
+    const pluginInfo = await getPluginInfo();
+    if (!pluginInfo) {
+      alert('无法更新：缺少插件信息');
+      return;
+    }
+
+    const { pluginKey, comicId } = pluginInfo;
+
+    console.log('[handleUpdate] Clearing cache for:', { pluginKey, comicId });
+    
     setIsUpdating(true);
     try {
+      // 清除插件的缓存数据
+      await clearPluginData(pluginKey);
+      await clearPluginMangaCache(pluginKey);
+      
+      // 清除漫画详情缓存
+      await deleteMangaCache(pluginKey, comicId);
+      
+      console.log('[handleUpdate] Cache cleared, fetching new data...');
+      
       // 重新获取漫画详情
       const detail = await getComicDetail(pluginKey, comicId);
 
@@ -377,6 +417,11 @@ export function MangaDetail({ mangaId }: MangaDetailProps) {
 
       // 更新显示数据
       setManga({ ...manga, updatedAt: Date.now() });
+      setPluginManga(detail);  // 更新插件漫画数据，使 UI 显示最新内容
+      
+      // 更新缓存（1 小时）
+      await saveMangaCache(pluginKey, comicId, detail, 60 * 60 * 1000);
+      
       alert('更新成功');
     } catch (e: any) {
       console.error('Update failed:', e);
@@ -727,7 +772,12 @@ export function MangaDetail({ mangaId }: MangaDetailProps) {
               )}
               {/* 排序按钮 */}
               <button
-                onClick={() => setChapterReverseOrder(!chapterReverseOrder)}
+                onClick={() => {
+                  const newOrder = !chapterReverseOrder;
+                  setChapterReverseOrder(newOrder);
+                  // 保存到 localStorage
+                  localStorage.setItem('manga_chapter_order', newOrder ? 'reverse' : 'normal');
+                }}
                 class="px-3 py-1.5 text-sm bg-[#16213e] text-gray-300 rounded-lg hover:text-white"
               >
                 {chapterReverseOrder ? '正序' : '倒序'}

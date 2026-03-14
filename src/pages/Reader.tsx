@@ -20,6 +20,7 @@ interface ReaderProps {
   mangaId?: string;
   chapterId?: string;
   pluginKey?: string;
+  page?: string;  // 从历史记录传入的初始页码
 }
 
 interface ReaderSettings {
@@ -117,7 +118,7 @@ interface ProcessedImage {
   isOffline?: boolean;   // 是否来自离线缓存
 }
 
-export function Reader({ mangaId, chapterId, pluginKey }: ReaderProps) {
+export function Reader({ mangaId, chapterId, pluginKey, page }: ReaderProps) {
   const [manga, setManga] = useState<MangaRecord | null>(null);
   const [chapter, setChapter] = useState<MemoryChapter | null>(null);
   const [chapters, setChapters] = useState<MemoryChapter[]>([]);
@@ -254,7 +255,14 @@ export function Reader({ mangaId, chapterId, pluginKey }: ReaderProps) {
         await loadChapterImages(mangaData as MangaRecord, currentCh);
 
         // 恢复阅读进度
-        if (mangaId && chapterId) {
+        // 优先使用传入的 page 参数（来自历史记录），其次从数据库恢复
+        if (page !== undefined && page !== '') {
+          const pageNum = parseInt(page, 10);
+          if (!isNaN(pageNum) && pageNum >= 0) {
+            setCurrentPage(pageNum);
+            saveProgress(pageNum);
+          }
+        } else if (mangaId && chapterId) {
           const history = await ReadHistory.findOne({
             where: { mangaId, chapterId },
           });
@@ -276,7 +284,20 @@ export function Reader({ mangaId, chapterId, pluginKey }: ReaderProps) {
     return () => {
       cleanupBlobUrls(processedImagesRef.current);
     };
-  }, [mangaId, chapterId]);
+  }, [mangaId, chapterId, page]);
+
+  // 当页面变化时，滚动到指定位置（Webtoon 模式）
+  useEffect(() => {
+    if (settings.webtoonMode && webtoonRef.current && processedImages.length > 0) {
+      const images = webtoonRef.current.querySelectorAll('.webtoon-image');
+      if (images[currentPage]) {
+        // 等待一下让图片渲染完成
+        setTimeout(() => {
+          images[currentPage].scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }, 100);
+      }
+    }
+  }, [currentPage, settings.webtoonMode, processedImages.length]);
 
   // 清理 blob URL
   const cleanupBlobUrls = useCallback((images: ProcessedImage[]) => {
@@ -350,6 +371,7 @@ export function Reader({ mangaId, chapterId, pluginKey }: ReaderProps) {
   // 分批处理：先处理前几张，剩余图片按需处理
   const BATCH_SIZE = 3; // 初始处理数量
   const pendingUrlsRef = useRef<Map<number, string>>(new Map()); // 待处理的URL
+  const processedChapterIds = useRef<Set<string>>(new Set()); // 已处理的章节 ID，避免重复加载
 
   // 获取离线缓存的图片
   const getOfflineImageUrl = async (mangaExternalId: string, chapterId: string, index: number): Promise<string | null> => {
@@ -379,6 +401,13 @@ export function Reader({ mangaId, chapterId, pluginKey }: ReaderProps) {
       // 提取真正的 epId（只取 / 前面的部分）
       const epId = chapterId.includes('/') ? chapterId.split('/')[0] : chapterId;
       console.log('[processImageUrls] chapterId:', chapterId, '-> epId:', epId, 'total:', urls.length);
+      // 检查是否已处理过这个章节，避免重复加载
+      const chapterCacheKey = `${comicId}_${chapterId}`;
+      if (processedChapterIds.current.has(chapterCacheKey)) {
+        console.log('[processImageUrls] Chapter already processed, skipping');
+        return;
+      }
+      processedChapterIds.current.add(chapterCacheKey);
 
       // 先检查离线缓存
       const processedWithCache: ProcessedImage[] = [];
@@ -420,17 +449,26 @@ export function Reader({ mangaId, chapterId, pluginKey }: ReaderProps) {
         }
 
         const url = urls[i];
-        const result = await processImageLoad(pluginId, url, comicId, epId);
-        setProcessedImages(prev => {
-          const updated = [...prev];
-          updated[i] = {
-            url: result.blobUrl || result.url,
-            originalUrl: url,
-            blobUrl: result.blobUrl,
-            headers: result.headers,
-          };
-          return updated;
-        });
+        try {
+          const result = await processImageLoad(pluginId, url, comicId, epId);
+          
+          setProcessedImages(prev => {
+            const updated = [...prev];
+            updated[i] = {
+              url: result.blobUrl || result.url,
+              originalUrl: url,
+              blobUrl: result.blobUrl,
+              headers: result.headers,
+            };
+            return updated;
+          });
+        } catch (e: any) {
+          // CF 挑战会触发全局回调，这里只需要停止处理
+          if (e.message?.startsWith('CF_CHALLENGE:')) {
+            break; // 停止处理后续图片
+          }
+          console.error(`[processImageUrls] Failed to load image ${i}:`, e);
+        }
       }
 
     } catch (e) {
@@ -572,6 +610,9 @@ export function Reader({ mangaId, chapterId, pluginKey }: ReaderProps) {
         chapterId: nextChapter.id,
         pluginKey: pluginKey as string,
       });
+    } else {
+      // 已经是最后一章
+      alert('已经是最后一章了');
     }
   }, [chapter, chapters, chapterReverseOrder, mangaId]);
 
@@ -683,6 +724,7 @@ export function Reader({ mangaId, chapterId, pluginKey }: ReaderProps) {
       : chapters;
 
     const currentIndex = sortedChapters.findIndex((ch) => ch.id === chapter.id);
+    // 检查是否是最后一章
     if (currentIndex < 0 || currentIndex >= sortedChapters.length - 1) {
       setHasMoreChapters(false);
       return;
@@ -970,7 +1012,29 @@ export function Reader({ mangaId, chapterId, pluginKey }: ReaderProps) {
           {/* Progress */}
           <div class="flex items-center gap-3 mb-3">
             <span class="text-sm text-white">{currentPage + 1}</span>
-            <div class="flex-1 h-1 bg-gray-600 rounded-full overflow-hidden">
+            <div
+              class="flex-1 h-1 bg-gray-600 rounded-full overflow-hidden cursor-pointer"
+              onClick={(e) => {
+                const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const percentage = x / rect.width;
+                const newPage = Math.floor(percentage * totalPages);
+                const targetPage = Math.max(0, Math.min(totalPages - 1, newPage));
+                setCurrentPage(targetPage);
+                saveProgress(targetPage);
+                
+                // 滚动到指定图片
+                if (settings.webtoonMode && webtoonRef.current) {
+                  const images = webtoonRef.current.querySelectorAll('.webtoon-image');
+                  if (images[targetPage]) {
+                    images[targetPage].scrollIntoView({ behavior: 'smooth', block: 'start' });
+                  }
+                } else if (containerRef.current) {
+                  // 普通模式：滚动容器到顶部（因为图片是居中显示的）
+                  containerRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+                }
+              }}
+            >
               <div
                 class="h-full bg-[#e94560] transition-all duration-300"
                 style={{

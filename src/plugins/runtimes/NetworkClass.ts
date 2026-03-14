@@ -5,7 +5,7 @@ import { createAutoExternalAdapter, FetchAdapter, RequestManager } from "@/frame
 
 const requestManager = new RequestManager();
 
-// 优先注册外部适配器（油猴/Chrome插件）以绕过 CORS
+// 优先注册外部适配器（油猴/Chrome 插件）以绕过 CORS
 const externalAdapter = createAutoExternalAdapter();
 if (externalAdapter) {
   requestManager.register(externalAdapter);
@@ -18,7 +18,7 @@ if (externalAdapter) {
 
 export {requestManager};
 
-// Venera 格式: Network.get(url, { headers: {...}, ... })
+// Venera 格式：Network.get(url, { headers: {...}, ... })
 export class NetworkClass {
   async get(url: string, options?: Record<string, any>): Promise<{ status: number; body: string }> {
     try {
@@ -38,12 +38,31 @@ export class NetworkClass {
         }
       }
       const response = await requestManager.get(url, { headers });
-      console.log(response);
+      
+      // 检测 Cloudflare 挑战页面
+      if (response.status === 403 || response.status === 503) {
+        const responseText = typeof response.data === 'string' ? response.data : '';
+        if (responseText.includes('cdn-cgi/challenge-platform') || 
+            responseText.includes('Just a moment') ||
+            responseText.includes('cf_chl')) {
+          console.log('[Network] Detected CF challenge:', url);
+          // 触发全局 CF 挑战回调
+          import('../../components/CfChallengeModal').then(({ triggerCfChallenge }) => {
+            triggerCfChallenge(url);
+          });
+          throw new Error(`CF_CHALLENGE:${url}`);
+        }
+      }
+      
       return {
         status: response.status,
         body: typeof response.data === 'string' ? response.data : JSON.stringify(response.data),
       };
     } catch (error: any) {
+      // CF 挑战错误直接抛出
+      if (error.message?.startsWith('CF_CHALLENGE:')) {
+        throw error;
+      }
       return { status: error.status || 0, body: error.message || 'Network error' };
     }
   }
@@ -64,11 +83,31 @@ export class NetworkClass {
         }
       }
       const response = await requestManager.post(url, body, { headers });
+      
+      // 检测 Cloudflare 挑战页面
+      if (response.status === 403 || response.status === 503) {
+        const responseText = typeof response.data === 'string' ? response.data : '';
+        if (responseText.includes('cdn-cgi/challenge-platform') || 
+            responseText.includes('Just a moment') ||
+            responseText.includes('cf_chl')) {
+          console.log('[Network] Detected CF challenge:', url);
+          // 触发全局 CF 挑战回调
+          import('../../components/CfChallengeModal').then(({ triggerCfChallenge }) => {
+            triggerCfChallenge(url);
+          });
+          throw new Error(`CF_CHALLENGE:${url}`);
+        }
+      }
+      
       return {
         status: response.status,
         body: typeof response.data === 'string' ? response.data : JSON.stringify(response.data),
       };
     } catch (error: any) {
+      // CF 挑战错误直接抛出
+      if (error.message?.startsWith('CF_CHALLENGE:')) {
+        throw error;
+      }
       return { status: error.status || 0, body: error.message || 'Network error' };
     }
   }
@@ -83,5 +122,3 @@ export class NetworkClass {
     console.log('Delete cookies:', domain);
   }
 }
-
-

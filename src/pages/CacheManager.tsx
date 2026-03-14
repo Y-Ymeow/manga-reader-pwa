@@ -3,6 +3,9 @@ import { Button } from '@components/ui/Button';
 import { getCacheManager } from '../fs/cache-manager';
 import { getCacheQueue, type CacheTask } from '../fs/cache-queue';
 import { navigate } from '@routes/index';
+import { getDatabaseStats, clearAllStores } from '@db/cleanup';
+import { clearPluginData, clearPluginMangaCache, listPluginDataKeys } from '@plugins/storage';
+import { getPlugins } from '@plugins/index';
 
 interface CacheStats {
   totalSize: number;
@@ -10,12 +13,27 @@ interface CacheStats {
   storageType: 'opfs' | 'fs' | 'indexeddb';
 }
 
+interface DbCacheStats {
+  totalRecords: number;
+  storeStats: Array<{ name: string; count: number }>;
+}
+
+interface PluginCacheInfo {
+  key: string;
+  name: string;
+  dataKeys: string[];
+  cacheCount: number;
+}
+
 export function CacheManager() {
   const [stats, setStats] = useState<CacheStats | null>(null);
+  const [dbStats, setDbStats] = useState<DbCacheStats | null>(null);
   const [tasks, setTasks] = useState<CacheTask[]>([]);
   const [loading, setLoading] = useState(true);
   const [clearing, setClearing] = useState(false);
   const [expandedTasks, setExpandedTasks] = useState<Set<string>>(new Set());
+  const [pluginCaches, setPluginCaches] = useState<PluginCacheInfo[]>([]);
+  const [selectedPlugins, setSelectedPlugins] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     loadCacheInfo();
@@ -35,17 +53,56 @@ export function CacheManager() {
       const cacheManager = getCacheManager();
       await cacheManager.init();
 
-      // 获取统计
+      // 获取 OPFS/文件缓存统计
       const cacheStats = await cacheManager.getStats();
       setStats(cacheStats);
+
+      // 获取 IndexedDB 缓存统计
+      const stats = await getDatabaseStats();
+      const cacheStores = stats.filter(s =>
+        s.storeName === 'manga_cache' ||
+        s.storeName === 'plugin_settings' ||
+        s.storeName === 'cache_index' ||
+        s.storeName === 'file_cache'
+      );
+      const totalRecords = cacheStores.reduce((sum, s) => sum + (s.recordCount || 0), 0);
+      setDbStats({
+        totalRecords,
+        storeStats: cacheStores.map(s => ({ name: s.storeName, count: s.recordCount || 0 })),
+      });
 
       // 获取当前队列任务
       const cacheQueue = getCacheQueue();
       setTasks(cacheQueue.getAllTasks());
+
+      // 加载插件缓存信息
+      await loadPluginCacheInfo();
     } catch (e) {
       console.error('Failed to load cache info:', e);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadPluginCacheInfo = async () => {
+    try {
+      const plugins = getPlugins();
+      const infos: PluginCacheInfo[] = [];
+
+      for (const plugin of plugins) {
+        const dataKeys = await listPluginDataKeys(plugin.key);
+        const cacheCount = dataKeys.length;
+        infos.push({
+          key: plugin.key,
+          name: plugin.name,
+          dataKeys,
+          cacheCount,
+        });
+      }
+
+      setPluginCaches(infos);
+    } catch (e) {
+      console.error('Failed to load plugin cache info:', e);
     }
   };
 
@@ -73,6 +130,92 @@ export function CacheManager() {
     }
   };
 
+  const handleClearLocalStorage = async () => {
+    if (!confirm('确定要清除 localStorage 中的缓存吗？这将删除：\n- 插件配置数据\n- 域名配置\n- 搜索历史等\n\n此操作不会删除漫画图片缓存。')) {
+      return;
+    }
+
+    setClearing(true);
+    try {
+      // 清除所有插件数据
+      const plugins = getPlugins();
+      for (const plugin of plugins) {
+        await clearPluginData(plugin.key);
+      }
+
+      // 清除其他 localStorage 数据
+      const keysToRemove: string[] = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && (
+          key.startsWith('plugin_data_') ||
+          key.startsWith('plugin_setting_') ||
+          key.startsWith('manga_reader_')
+        )) {
+          keysToRemove.push(key);
+        }
+      }
+      keysToRemove.forEach(key => localStorage.removeItem(key));
+
+      alert(`localStorage 缓存已清除完成！\n清除了 ${keysToRemove.length} 项数据`);
+      await loadPluginCacheInfo();
+    } catch (e: any) {
+      console.error('Failed to clear localStorage:', e);
+      alert('清除缓存失败：' + e.message);
+    } finally {
+      setClearing(false);
+    }
+  };
+
+  const handleClearSelectedPlugins = async () => {
+    if (selectedPlugins.size === 0) {
+      alert('请先选择要清除的插件');
+      return;
+    }
+
+    if (!confirm(`确定要清除选中的 ${selectedPlugins.size} 个插件的缓存吗？\n\n这将删除：\n- 插件配置数据\n- 漫画详情缓存\n- 缓存索引`)) {
+      return;
+    }
+
+    setClearing(true);
+    try {
+      for (const pluginKey of selectedPlugins) {
+        await clearPluginData(pluginKey);
+        await clearPluginMangaCache(pluginKey);
+      }
+
+      alert(`已清除 ${selectedPlugins.size} 个插件的缓存`);
+      setSelectedPlugins(new Set());
+      await loadPluginCacheInfo();
+      await loadCacheInfo();
+    } catch (e: any) {
+      console.error('Failed to clear selected plugins:', e);
+      alert('清除缓存失败：' + e.message);
+    } finally {
+      setClearing(false);
+    }
+  };
+
+  const togglePluginSelection = (pluginKey: string) => {
+    setSelectedPlugins(prev => {
+      const next = new Set(prev);
+      if (next.has(pluginKey)) {
+        next.delete(pluginKey);
+      } else {
+        next.add(pluginKey);
+      }
+      return next;
+    });
+  };
+
+  const selectAllPlugins = () => {
+    setSelectedPlugins(new Set(pluginCaches.map(p => p.key)));
+  };
+
+  const deselectAllPlugins = () => {
+    setSelectedPlugins(new Set());
+  };
+
   const handleClearOldCache = async () => {
     if (!confirm('确定要清除 30 天前的缓存吗？')) {
       return;
@@ -88,6 +231,56 @@ export function CacheManager() {
     } catch (e) {
       console.error('Failed to clear old cache:', e);
       alert('清除缓存失败');
+    } finally {
+      setClearing(false);
+    }
+  };
+
+  const handleClearDbCache = async () => {
+    if (!confirm('确定要清除 IndexedDB 中的缓存数据吗？这将删除：\n- 漫画详情缓存\n- 插件缓存数据\n- 缓存索引\n\n此操作不可恢复！')) {
+      return;
+    }
+
+    setClearing(true);
+    try {
+      // 清除所有插件的缓存数据
+      const { getPlugins } = await import('@plugins/index');
+      const plugins = getPlugins();
+      for (const plugin of plugins) {
+        await clearPluginData(plugin.key);
+        await clearPluginMangaCache(plugin.key);
+      }
+
+      // 清除 manga_cache, cache_index, file_cache store
+      const storesToClear = ['manga_cache', 'cache_index', 'file_cache'];
+      for (const storeName of storesToClear) {
+        try {
+          const db = await new Promise<IDBDatabase>((resolve, reject) => {
+            const request = indexedDB.open('manga-reader');
+            request.onerror = () => reject(request.error);
+            request.onsuccess = () => resolve(request.result);
+          });
+          
+          if (db.objectStoreNames.contains(storeName)) {
+            await new Promise<void>((resolve, reject) => {
+              const tx = db.transaction([storeName], 'readwrite');
+              const store = tx.objectStore(storeName);
+              const request = store.clear();
+              request.onsuccess = () => resolve();
+              request.onerror = () => reject(request.error);
+            });
+          }
+          db.close();
+        } catch (e) {
+          console.warn(`Failed to clear store ${storeName}:`, e);
+        }
+      }
+
+      alert('IndexedDB 缓存已清除完成！');
+      await loadCacheInfo();
+    } catch (e: any) {
+      console.error('Failed to clear DB cache:', e);
+      alert('清除缓存失败：' + e.message);
     } finally {
       setClearing(false);
     }
@@ -176,7 +369,7 @@ export function CacheManager() {
           <>
             {/* 统计卡片 */}
             <div class="bg-[#16213e] rounded-xl p-4">
-              <h2 class="text-white font-medium mb-3">缓存统计</h2>
+              <h2 class="text-white font-medium mb-3">图片缓存 (OPFS/文件系统)</h2>
               {stats ? (
                 <div class="space-y-2 text-sm">
                   <div class="flex justify-between">
@@ -194,6 +387,27 @@ export function CacheManager() {
                 </div>
               ) : (
                 <p class="text-gray-400 text-sm">无法获取缓存统计</p>
+              )}
+            </div>
+
+            {/* IndexedDB 缓存统计 */}
+            <div class="bg-[#16213e] rounded-xl p-4">
+              <h2 class="text-white font-medium mb-3">IndexedDB 缓存</h2>
+              {dbStats ? (
+                <div class="space-y-2 text-sm">
+                  <div class="flex justify-between">
+                    <span class="text-gray-400">总记录数</span>
+                    <span class="text-white">{dbStats.totalRecords} 条</span>
+                  </div>
+                  {dbStats.storeStats.map(store => (
+                    <div key={store.name} class="flex justify-between">
+                      <span class="text-gray-400">{store.name}</span>
+                      <span class="text-white">{store.count} 条</span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p class="text-gray-400 text-sm">无法获取 IndexedDB 缓存统计</p>
               )}
             </div>
 
@@ -309,6 +523,22 @@ export function CacheManager() {
               <h2 class="text-white font-medium mb-3">缓存操作</h2>
               <div class="space-y-3">
                 <Button
+                  onClick={handleClearLocalStorage}
+                  disabled={clearing}
+                  variant="secondary"
+                  className="w-full"
+                >
+                  {clearing ? '清除中...' : '清除 localStorage 缓存'}
+                </Button>
+                <Button
+                  onClick={handleClearDbCache}
+                  disabled={clearing}
+                  variant="secondary"
+                  className="w-full"
+                >
+                  {clearing ? '清除中...' : '清除 IndexedDB 缓存'}
+                </Button>
+                <Button
                   onClick={handleClearOldCache}
                   disabled={clearing}
                   variant="secondary"
@@ -335,6 +565,62 @@ export function CacheManager() {
               </div>
             </div>
 
+            {/* 按插件清除 */}
+            <div class="bg-[#16213e] rounded-xl p-4">
+              <div class="flex items-center justify-between mb-3">
+                <h2 class="text-white font-medium">按插件清除缓存</h2>
+                <div class="flex gap-2">
+                  <button
+                    onClick={selectAllPlugins}
+                    class="text-xs text-[#e94560] hover:underline"
+                  >
+                    全选
+                  </button>
+                  <button
+                    onClick={deselectAllPlugins}
+                    class="text-xs text-gray-400 hover:underline"
+                  >
+                    取消全选
+                  </button>
+                </div>
+              </div>
+
+              {pluginCaches.length > 0 ? (
+                <div class="space-y-2 max-h-60 overflow-y-auto">
+                  {pluginCaches.map((plugin) => (
+                    <label
+                      key={plugin.key}
+                      class="flex items-center gap-3 p-2 bg-[#0f3460]/50 rounded-lg cursor-pointer hover:bg-[#0f3460]"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedPlugins.has(plugin.key)}
+                        onChange={() => togglePluginSelection(plugin.key)}
+                        class="w-4 h-4 accent-[#e94560]"
+                      />
+                      <div class="flex-1">
+                        <p class="text-white text-sm">{plugin.name}</p>
+                        <p class="text-xs text-gray-400">
+                          {plugin.cacheCount} 项数据
+                        </p>
+                      </div>
+                    </label>
+                  ))}
+                </div>
+              ) : (
+                <p class="text-gray-400 text-sm py-4 text-center">暂无插件缓存数据</p>
+              )}
+
+              <Button
+                onClick={handleClearSelectedPlugins}
+                disabled={clearing || selectedPlugins.size === 0}
+                variant="secondary"
+                className="w-full mt-3"
+              >
+                {clearing ? '清除中...' : `清除选中的插件缓存 (${selectedPlugins.size})`}
+              </Button>
+            </div>
+
             {/* 说明 */}
             <div class="bg-[#16213e]/50 rounded-xl p-4">
               <h3 class="text-white font-medium mb-2">说明</h3>
@@ -343,6 +629,8 @@ export function CacheManager() {
                 <li>同一漫画源的缓存按队列顺序执行，避免触发反爬</li>
                 <li>优先使用 OPFS 存储，容量更大</li>
                 <li>缓存文件默认保留 30 天</li>
+                <li>localStorage 存储插件配置和域名设置</li>
+                <li>可按插件选择清除缓存，避免影响其他插件</li>
               </ul>
             </div>
           </>

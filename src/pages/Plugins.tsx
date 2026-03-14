@@ -177,7 +177,14 @@ export function Plugins() {
   const hasUpdate = (item: SourceListItem) => {
     const installed = plugins.find(p => p.key === item.key);
     if (!installed) return false;
+    // 比较版本号（简单字符串比较）
     return installed.version !== item.version;
+  };
+
+  // 获取已安装插件的版本
+  const getInstalledVersion = (key: string) => {
+    const installed = plugins.find(p => p.key === key);
+    return installed?.version || null;
   };
 
   return (
@@ -298,6 +305,7 @@ export function Plugins() {
                 {sourceList.map((item) => {
                   const installed = isPluginInstalled(item.key);
                   const updateAvailable = hasUpdate(item);
+                  const installedVersion = getInstalledVersion(item.key);
 
                   return (
                     <div
@@ -307,12 +315,16 @@ export function Plugins() {
                       <div>
                         <p class="text-white font-medium">{item.name}</p>
                         <p class="text-xs text-gray-400">
-                          v{item.version}
-                          {installed && (
-                            <span class="ml-2 text-green-400">已安装</span>
-                          )}
-                          {updateAvailable && (
-                            <span class="ml-2 text-[#e94560]">有更新</span>
+                          最新版本：v{item.version}
+                          {installedVersion && (
+                            <span class="ml-2">
+                              (当前：v{installedVersion})
+                              {updateAvailable && (
+                                <span class="ml-2 text-[#e94560] font-medium">
+                                  → 可更新
+                                </span>
+                              )}
+                            </span>
                           )}
                         </p>
                       </div>

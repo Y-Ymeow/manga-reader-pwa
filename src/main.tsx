@@ -6,7 +6,7 @@ import './style.css';
 
 (window as any).orginImage = window.Image;
 
-// 自动初始化数据库
+// 自动初始化数据库（会执行版本 4 migration 创建缺失的 store）
 autoInitDatabase();
 
 // 初始化插件系统并恢复已安装的插件

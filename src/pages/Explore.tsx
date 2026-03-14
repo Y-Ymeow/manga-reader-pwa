@@ -6,6 +6,7 @@ import { navigate } from '@routes/index';
 import {
   initPluginSystem,
   getPlugins,
+  getPlugin,
   getExploreData,
   getCategoryData,
   getCategoryComics,
@@ -38,9 +39,7 @@ export function Explore() {
         await restorePluginsFromStorage();
         const loadedPlugins = getPlugins();
         setPlugins(loadedPlugins);
-        if (loadedPlugins.length > 0 && !selectedPlugin) {
-          setSelectedPlugin(loadedPlugins[0]);
-        }
+        // 不自动选择第一个插件，等用户点击后再加载
       } catch (e) {
         console.error('Failed to initialize:', e);
       }
@@ -60,12 +59,18 @@ export function Explore() {
         setCategoryData(null);
       }
     };
-    loadCategory();
+    
+    // 只在切换 viewMode 时重新加载分类，不在切换插件时加载（点击时已加载）
+    if (viewMode === 'category') {
+      loadCategory();
+    }
 
     if (viewMode !== 'explore') return;
 
     const loadExplore = async () => {
+      setComics([]);  // 清空旧数据，避免切换插件时显示旧内容
       setLoading(true);
+    setComics([]);  // 清空旧数据
       setError('');
       setCurrentPage(1);
       try {
@@ -75,6 +80,8 @@ export function Explore() {
           setLoading(false);
           return;
         }
+        // 确保插件已初始化（执行 init 方法）
+        await getPlugin(selectedPlugin.key);
         const data = await getExploreData(selectedPlugin.key, explorePages[0].title, 1);
         let comicsArray: Comic[] = [];
         let maxPageNum = 1;
@@ -124,6 +131,7 @@ export function Explore() {
     if (explorePages.length === 0) return;
 
     setLoading(true);
+    setComics([]);  // 清空旧数据
     try {
       const nextPage = currentPage + 1;
       const data = await getExploreData(selectedPlugin.key, explorePages[0].title, nextPage);
@@ -171,6 +179,7 @@ export function Explore() {
     setSelectedCategory({ name: categoryName, param: categoryParam });
     setViewMode('category');
     setLoading(true);
+    setComics([]);  // 清空旧数据
     setError('');
     setCurrentPage(1);
 
@@ -205,6 +214,7 @@ export function Explore() {
   const loadMoreCategoryComics = async () => {
     if (!selectedPlugin || !selectedCategory || loading) return;
     setLoading(true);
+    setComics([]);  // 清空旧数据
     try {
       const nextPage = currentPage + 1;
       const result = await getCategoryComics(
@@ -236,6 +246,7 @@ export function Explore() {
 
     if (selectedCategory) {
       setLoading(true);
+    setComics([]);  // 清空旧数据
       setCurrentPage(1);
       try {
         const result = await getCategoryComics(
@@ -395,7 +406,13 @@ export function Explore() {
             {plugins.map((plugin) => (
               <div
                 key={plugin.key}
-                onClick={() => setSelectedPlugin(plugin)}
+                onClick={() => {
+                  setSelectedPlugin(plugin);
+                  // 点击时初始化插件并加载分类数据
+                  getPlugin(plugin.key).then(() => {
+                    getCategoryData(plugin.key).then(setCategoryData).catch(() => setCategoryData(null));
+                  });
+                }}
                 class={`flex-shrink-0 px-4 py-3 rounded-xl cursor-pointer transition-all ${
                   selectedPlugin?.key === plugin.key
                     ? 'bg-[#e94560] text-white shadow-lg shadow-[#e94560]/30'

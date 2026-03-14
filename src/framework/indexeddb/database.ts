@@ -53,6 +53,10 @@ export class DatabaseManager {
     if (this.initialized) return;
 
     return new Promise((resolve, reject) => {
+      let migrationComplete = false;
+      let migrationError: Error | null = null;
+      let upgradeNeeded = false;
+
       const request = indexedDB.open(this.config.name, this.config.version);
 
       request.onerror = () => {
@@ -60,14 +64,8 @@ export class DatabaseManager {
         reject(new Error(`Failed to open database: ${request.error?.message}`));
       };
 
-      request.onsuccess = () => {
-        this.db = request.result;
-        this.initialized = true;
-        this.log('Database opened successfully, version:', this.db.version);
-        resolve();
-      };
-
       request.onupgradeneeded = (event) => {
+        upgradeNeeded = true;
         const db = (event.target as IDBOpenDBRequest).result;
         const transaction = (event.target as IDBOpenDBRequest).transaction;
         const oldVersion = event.oldVersion;
@@ -77,9 +75,50 @@ export class DatabaseManager {
 
         // 执行迁移
         if (transaction) {
+          // 监听 transaction complete 事件
+          transaction.oncomplete = () => {
+            this.log('Upgrade transaction completed');
+            migrationComplete = true;
+          };
+          
+          transaction.onerror = () => {
+            this.error('Upgrade transaction failed:', transaction.error);
+            migrationError = new Error(`Migration failed: ${transaction.error?.message}`);
+          };
+
+          // 执行迁移
           this.runMigrations(db, transaction, oldVersion, newVersion).catch((err) => {
             this.error('Migration failed:', err);
+            migrationError = err;
           });
+        }
+      };
+
+      request.onsuccess = () => {
+        // 如果有 upgrade，等待 migration 完成
+        if (upgradeNeeded) {
+          // 轮询等待 migration 完成
+          const checkComplete = () => {
+            if (migrationError) {
+              reject(migrationError);
+              return;
+            }
+            if (migrationComplete) {
+              this.db = request.result;
+              this.initialized = true;
+              this.log('Database opened successfully, version:', this.db.version);
+              resolve();
+            } else {
+              setTimeout(checkComplete, 10);
+            }
+          };
+          checkComplete();
+        } else {
+          // 没有 upgrade，直接 resolve
+          this.db = request.result;
+          this.initialized = true;
+          this.log('Database opened successfully, version:', this.db.version);
+          resolve();
         }
       };
     });

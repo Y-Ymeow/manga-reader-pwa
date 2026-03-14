@@ -7,7 +7,7 @@ import { Convert } from './runtimes/Convert';
 import { HtmlDocumentClass } from './runtimes/HTMLElement';
 import { NetworkClass, requestManager } from './runtimes/NetworkClass';
 import { createUuid, getClipboard, randomDouble, randomInt, setClipboard } from './runtimes/utils';
-import { loadMangaCache, saveMangaCache, loadPluginSetting, savePluginSetting } from './storage';
+import { loadMangaCache, saveMangaCache, loadPluginSetting, savePluginSetting, loadPluginData, savePluginData, loadAllPluginData } from './storage';
 
 
 // Hack fetch: 创建一个兼容标准 fetch API 的函数，但使用我们的请求管理器
@@ -91,89 +91,36 @@ class ComicSourceClass {
   settings: Record<string, any> = {};
 
   private pluginSettings: Record<string, any> = {};
+  private pluginData: Record<string, any> = {};
 
   // 从 IndexedDB 加载设置值（内部使用）
   _loadSettingFromStorage(key: string, value: any): void {
     this.pluginSettings[key] = value;
+  }
+  
+  // 从 IndexedDB 加载数据值（内部使用）
+  _loadDataFromStorage(data: Record<string, any>): void {
+    this.pluginData = data;
   }
 
   loadSetting(key: string): any {
     return this.pluginSettings[key] ?? this.settings[key]?.default;
   }
 
-  saveSetting(key: string, value: any): void {
+  async saveSetting(key: string, value: any): Promise<void> {
     this.pluginSettings[key] = value;
     // 设置项使用 IndexedDB（异步存储）
-    savePluginSetting(this.key, key, value).catch((e) => {
-      console.error('Failed to save setting:', e);
-    });
+    await savePluginSetting(this.key, key, value);
   }
-
-  // 加载漫画详情缓存（使用新的 manga_cache）
-  async loadCache<T>(comicId: string): Promise<T | null> {
-    return loadMangaCache(this.key, comicId);
-  }
-
-  // 保存漫画详情缓存（使用新的 manga_cache）
-  async saveCache<T>(comicId: string, data: T, ttlMinutes: number = 60): Promise<void> {
-    return saveMangaCache(this.key, comicId, data, ttlMinutes * 60 * 1000);
-  }
-
-  // 带缓存的执行方法（用于 loadInfo）
-  async withCache<T>(comicId: string, fn: () => Promise<T>, ttlMinutes: number = 60): Promise<T> {
-    // 尝试从缓存加载
-    const cached = await this.loadCache<T>(comicId);
-    if (cached !== null) {
-      console.log(`[Cache] HIT: ${this.key}:${comicId}`);
-      return cached;
-    }
-
-    // 执行函数获取数据
-    const result = await fn();
-
-    // 保存到缓存
-    await this.saveCache(comicId, result, ttlMinutes);
-
-    return result;
-  }
-
-  // 兼容旧版的 _withCache 方法
-  _withCache<T>(comicId: string, fn: () => Promise<T>, ttlMinutes: number = 60): Promise<T> {
-    return this.withCache(comicId, fn, ttlMinutes);
-  }
-
-  // 异步加载数据（使用 IndexedDB，支持存储 Map 等复杂对象）
-  async loadDataAsync(dataKey: string): Promise<any | null> {
-    return loadMangaCache(this.key, dataKey);
-  }
-
-  // 异步保存数据（使用 IndexedDB，支持存储 Map 等复杂对象）
-  async saveDataAsync(dataKey: string, value: any, ttlMinutes: number = 60): Promise<void> {
-    return saveMangaCache(this.key, dataKey, value, ttlMinutes * 60 * 1000);
-  }
-
-  // 同步加载数据（兼容旧版，使用 localStorage，只支持简单对象）
+  
   loadData(dataKey: string): any {
-    try {
-      const key = `plugin_data_${this.key}_${dataKey}`;
-      const value = localStorage.getItem(key);
-      if (value !== null) {
-        return JSON.parse(value);
-      }
-    } catch (e) {
-      console.error('Failed to load data:', e);
-    }
-    return null;
+    return this.pluginData[dataKey] ?? null;
   }
-
-  // 同步保存数据（兼容旧版，使用 localStorage，只支持简单对象）
-  saveData(dataKey: string, value: any): void {
-    try {
-      const key = `plugin_data_${this.key}_${dataKey}`;
-      localStorage.setItem(key, JSON.stringify(value));
-    } catch (e) {
-      console.warn('Failed to save to localStorage:', e);
-    }
+  
+  async saveData(dataKey: string, value: any): Promise<void> {
+    this.pluginData[dataKey] = value;
+    // 数据使用 IndexedDB（异步存储，每个插件一条数据）
+    await savePluginData(this.key, dataKey, value);
   }
 }
 

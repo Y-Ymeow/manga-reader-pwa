@@ -2,6 +2,7 @@ import { useState, useEffect } from "preact/hooks";
 import { Home } from "@pages/Home";
 import { Explore } from "@pages/Explore";
 import { Search } from "@pages/Search";
+import { Categories } from "@pages/Categories";
 import { Favorites } from "@pages/Favorites";
 import { History } from "@pages/History";
 import { Settings } from "@pages/Settings";
@@ -15,6 +16,7 @@ import { BottomNav } from "@components/layout/BottomNav";
 type Route =
   | "home"
   | "explore"
+  | "categories"
   | "search"
   | "favorites"
   | "history"
@@ -101,6 +103,8 @@ export function Router() {
         return <Home />;
       case "explore":
         return <Explore />;
+      case "categories":
+        return <Categories />;
       case "search":
         return <Search />;
       case "favorites":
@@ -133,6 +137,7 @@ export function Router() {
   const showBottomNav = [
     "home",
     "explore",
+    "categories",
     "search",
     "favorites",
     "history",

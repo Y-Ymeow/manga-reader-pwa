@@ -136,6 +136,7 @@
         data: serializedBody,
         timeout,
         responseType,
+        withCredentials: true,  // 发送 cookie
 
         onload: (response) => {
           const duration = Date.now() - startTime;
@@ -236,6 +237,7 @@
         data: serializedBody,
         timeout,
         responseType: 'text',
+        withCredentials: true,  // 发送 cookie
         
         onload: resolve,
         onerror: reject,

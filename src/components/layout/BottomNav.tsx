@@ -1,11 +1,12 @@
 interface BottomNavProps {
   currentRoute: string;
-  onNavigate: (route: 'home' | 'explore' | 'search' | 'favorites' | 'history' | 'settings') => void;
+  onNavigate: (route: 'home' | 'explore' | 'categories' | 'search' | 'favorites' | 'history' | 'settings') => void;
 }
 
 const navItems = [
   { id: 'home', label: '首页', icon: '🏠' },
   { id: 'explore', label: '发现', icon: '🔥' },
+  { id: 'categories', label: '分类', icon: '📂' },
   {
     id: "search",
     icon: "🔍",

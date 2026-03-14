@@ -6,6 +6,7 @@ interface InputProps {
   disabled?: boolean;
   className?: string;
   autoFocus?: boolean;
+  onKeyDown?: (e: KeyboardEvent) => void;
 }
 
 export function Input({
@@ -16,12 +17,14 @@ export function Input({
   disabled = false,
   className = '',
   autoFocus = false,
+  onKeyDown,
 }: InputProps) {
   return (
     <input
       type={type}
       value={value}
       onInput={(e) => onChange((e.target as HTMLInputElement).value)}
+      onKeyDown={onKeyDown}
       placeholder={placeholder}
       disabled={disabled}
       autoFocus={autoFocus}

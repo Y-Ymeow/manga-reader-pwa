@@ -120,7 +120,11 @@ export interface ComicOptions {
   loadChapters?: (id: string) => Promise<Chapter[]>;
   loadImages?: (comicId: string, chapterId: string) => Promise<string[]>;
   /** 处理图片加载，返回配置用于修改URL、添加headers或解混淆图片 */
-  onImageLoad?: (url: string, comicId: string, epId: string) => ImageLoadingConfig | Promise<ImageLoadingConfig>;
+  onImageLoad?: (
+    url: string,
+    comicId: string,
+    epId: string,
+  ) => ImageLoadingConfig | Promise<ImageLoadingConfig>;
 }
 
 // 账号
@@ -155,6 +159,7 @@ export interface PluginDefinition {
   search?: SearchOptions;
   favorites?: FavoritesOptions | null;
   comic?: ComicOptions;
+  init?: () => Promise<void>;
 }
 
 // 插件实例

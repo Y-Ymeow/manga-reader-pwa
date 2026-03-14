@@ -1,17 +1,49 @@
 import { useState } from 'preact/hooks';
 import { Button } from '@components/ui/Button';
 import { navigate } from '@routes/index';
+import { clearAllStores, clearLocalStorage } from '@db/cleanup';
+import { getCacheManager } from '../fs/cache-manager';
+import { clearPluginData, clearPluginMangaCache } from '@plugins/storage';
 
 export function Settings() {
-  const [settings, setSettings] = useState({
-    autoUpdate: true,
-    darkMode: true,
-    cacheSize: '0 MB',
-  });
+  const [isClearing, setIsClearing] = useState(false);
 
   const handleClearCache = async () => {
-    // TODO: Clear cache
-    alert('缓存已清除');
+    if (!confirm('确定要清除所有缓存吗？这将删除：\n- 所有漫画图片缓存\n- 插件缓存数据\n- 数据库中的所有记录\n\n此操作不可恢复！')) {
+      return;
+    }
+
+    setIsClearing(true);
+    try {
+      // 1. 清除漫画图片缓存（OPFS）
+      const cacheManager = getCacheManager();
+      await cacheManager.init();
+      await cacheManager.cleanup(0); // 清除所有
+
+      // 2. 清除所有插件数据
+      const { getPlugins } = await import('@plugins/index');
+      const plugins = getPlugins();
+      for (const plugin of plugins) {
+        await clearPluginData(plugin.key);
+        await clearPluginMangaCache(plugin.key);
+      }
+
+      // 3. 清除所有 store
+      await clearAllStores();
+
+      // 4. 清除 localStorage
+      const clearedCount = clearLocalStorage();
+
+      alert(`缓存已清除完成！\n- 清除了 ${clearedCount} 项 localStorage 数据\n- 清除了所有插件数据\n- 清除了所有数据库记录\n\n请刷新页面以生效。`);
+      
+      // 刷新页面
+      window.location.reload();
+    } catch (e: any) {
+      console.error('Failed to clear cache:', e);
+      alert('清除缓存失败：' + e.message);
+    } finally {
+      setIsClearing(false);
+    }
   };
 
   return (
@@ -21,24 +53,6 @@ export function Settings() {
       </header>
 
       <div class="p-4 space-y-6">
-        {/* General Settings */}
-        <section>
-          <h2 class="text-sm font-medium text-gray-400 uppercase tracking-wider mb-3">
-            常规
-          </h2>
-          <div class="bg-[#16213e] rounded-lg overflow-hidden">
-            <SettingItem
-              label="自动检查更新"
-              description="每天自动检查收藏的漫画更新"
-            >
-              <Toggle
-                checked={settings.autoUpdate}
-                onChange={(v) => setSettings(s => ({ ...s, autoUpdate: v }))}
-              />
-            </SettingItem>
-          </div>
-        </section>
-
         {/* Plugins */}
         <section>
           <h2 class="text-sm font-medium text-gray-400 uppercase tracking-wider mb-3">
@@ -66,21 +80,21 @@ export function Settings() {
           <div class="bg-[#16213e] rounded-lg overflow-hidden">
             <button
               onClick={() => navigate('cache-manager')}
-              class="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-[#1a4a7a] transition-colors border-b border-[#2a2a4a]"
+              class="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-[#1a4a7a] transition-colors"
             >
               <div>
                 <p class="text-white">缓存管理</p>
-                <p class="text-sm text-gray-400">查看和管理漫画缓存</p>
+                <p class="text-sm text-gray-400">查看缓存统计和清理</p>
               </div>
               <span class="text-gray-400">→</span>
             </button>
-            <div class="flex items-center justify-between px-4 py-3">
+            <div class="flex items-center justify-between px-4 py-3 border-t border-[#2a2a4a]">
               <div>
-                <p class="text-white">缓存大小</p>
-                <p class="text-sm text-gray-400">{settings.cacheSize}</p>
+                <p class="text-white">清除所有数据</p>
+                <p class="text-sm text-gray-400">删除所有缓存和记录</p>
               </div>
-              <Button variant="secondary" size="sm" onClick={handleClearCache}>
-                清除缓存
+              <Button variant="secondary" size="sm" onClick={handleClearCache} disabled={isClearing}>
+                {isClearing ? '清除中...' : '清除'}
               </Button>
             </div>
           </div>
@@ -101,45 +115,5 @@ export function Settings() {
         </section>
       </div>
     </div>
-  );
-}
-
-interface SettingItemProps {
-  label: string;
-  description?: string;
-  children: preact.ComponentChild;
-}
-
-function SettingItem({ label, description, children }: SettingItemProps) {
-  return (
-    <div class="flex items-center justify-between px-4 py-3 border-b border-[#2a2a4a] last:border-b-0">
-      <div>
-        <p class="text-white">{label}</p>
-        {description && <p class="text-sm text-gray-400">{description}</p>}
-      </div>
-      {children}
-    </div>
-  );
-}
-
-interface ToggleProps {
-  checked: boolean;
-  onChange: (checked: boolean) => void;
-}
-
-function Toggle({ checked, onChange }: ToggleProps) {
-  return (
-    <button
-      onClick={() => onChange(!checked)}
-      class={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-        checked ? 'bg-[#e94560]' : 'bg-gray-600'
-      }`}
-    >
-      <span
-        class={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-          checked ? 'translate-x-6' : 'translate-x-1'
-        }`}
-      />
-    </button>
   );
 }

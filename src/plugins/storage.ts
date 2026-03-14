@@ -1,101 +1,19 @@
 /**
  * 插件存储管理
- * 统一使用 IndexedDB 存储
+ * 统一使用 manga-reader 数据库的 store
  */
 
-import { openDB } from 'idb';
-import type { DBSchema, IDBPDatabase } from 'idb';
+import { waitForDatabase } from '../db/global';
 
-const DB_NAME = 'manga-reader-plugins';
-const DB_VERSION = 2; // 增加版本号以触发 upgrade
-
-interface PluginDB extends DBSchema {
-  plugins: {
-    key: string;
-    value: {
-      key: string;
-      code: string;
-      installedAt: number;
-      updatedAt: number;
-    };
-  };
-  manga_cache: {
-    key: string; // pluginKey:comicId
-    value: {
-      key: string;
-      data: any;
-      expiresAt: number;
-      createdAt: number;
-    };
-    indexes: { expiresAt: number };
-  };
-  settings: {
-    key: string;
-    value: any;
-  };
-}
-
-let db: IDBPDatabase<PluginDB> | null = null;
-
-/**
- * 检查 IndexedDB 是否可用
- */
-function checkIndexedDBSupport(): boolean {
-  if (!window.indexedDB) {
-    console.error('[PluginStorage] IndexedDB is not supported in this browser');
-    return false;
-  }
-  return true;
-}
-
-/**
- * 初始化插件存储
- */
-export async function initPluginStorage(): Promise<void> {
-  if (db) return;
-
-  if (!checkIndexedDBSupport()) {
-    throw new Error('IndexedDB is not supported');
-  }
-
-  try {
-    console.log('[PluginStorage] Opening database...');
-    db = await openDB<PluginDB>(DB_NAME, DB_VERSION, {
-      upgrade(database, oldVersion, newVersion) {
-        console.log(`[PluginStorage] Upgrading DB from ${oldVersion} to ${newVersion}`);
-        if (!database.objectStoreNames.contains('plugins')) {
-          database.createObjectStore('plugins', { keyPath: 'key' });
-          console.log('[PluginStorage] Created plugins store');
-        }
-        if (!database.objectStoreNames.contains('manga_cache')) {
-          const cacheStore = database.createObjectStore('manga_cache', { keyPath: 'key' });
-          cacheStore.createIndex('expiresAt', 'expiresAt', { unique: false });
-          console.log('[PluginStorage] Created manga_cache store');
-        }
-        if (!database.objectStoreNames.contains('settings')) {
-          database.createObjectStore('settings');
-          console.log('[PluginStorage] Created settings store');
-        }
-      },
-    });
-    console.log('[PluginStorage] Initialized successfully, stores:', Array.from(db.objectStoreNames));
-  } catch (e) {
-    console.error('[PluginStorage] Failed to initialize:', e);
-    throw e;
-  }
-}
-
-/**
- * 获取数据库实例
- */
-async function getDB(): Promise<IDBPDatabase<PluginDB>> {
-  if (!db) {
-    await initPluginStorage();
-  }
-  if (!db) {
-    throw new Error('Failed to initialize plugin storage');
-  }
-  return db;
+// 使用统一的数据库
+async function getDB(): Promise<IDBDatabase> {
+  await waitForDatabase();
+  return new Promise((resolve, reject) => {
+    // 不指定版本，让浏览器使用最新版本
+    const request = indexedDB.open('manga-reader');
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => resolve(request.result);
+  });
 }
 
 // ===== 插件代码存储 =====
@@ -104,15 +22,27 @@ async function getDB(): Promise<IDBPDatabase<PluginDB>> {
  * 保存插件代码
  */
 export async function savePluginCode(key: string, code: string): Promise<void> {
-  const database = await getDB();
+  const db = await getDB();
   const now = Date.now();
-
-  const existing = await database.get('plugins', key);
-  await database.put('plugins', {
-    key,
-    code,
-    installedAt: existing?.installedAt || now,
-    updatedAt: now,
+  
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('plugin_codes', 'readwrite');
+    const store = tx.objectStore('plugin_codes');
+    
+    // 先获取现有记录
+    const getRequest = store.get(key);
+    getRequest.onsuccess = () => {
+      const existing = getRequest.result;
+      const putRequest = store.put({
+        key,
+        code,
+        installedAt: existing?.installedAt || now,
+        updatedAt: now,
+      });
+      putRequest.onsuccess = () => resolve();
+      putRequest.onerror = () => reject(putRequest.error);
+    };
+    getRequest.onerror = () => reject(getRequest.error);
   });
 }
 
@@ -120,31 +50,50 @@ export async function savePluginCode(key: string, code: string): Promise<void> {
  * 加载插件代码
  */
 export async function loadPluginCode(key: string): Promise<string | null> {
-  const database = await getDB();
-  const record = await database.get('plugins', key);
-  return record?.code || null;
+  const db = await getDB();
+  
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('plugin_codes', 'readonly');
+    const store = tx.objectStore('plugin_codes');
+    const request = store.get(key);
+    request.onsuccess = () => resolve(request.result?.code || null);
+    request.onerror = () => reject(request.error);
+  });
 }
 
 /**
  * 删除插件代码
  */
 export async function deletePluginCode(key: string): Promise<void> {
-  const database = await getDB();
-  await database.delete('plugins', key);
+  const db = await getDB();
+  
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('plugin_codes', 'readwrite');
+    const store = tx.objectStore('plugin_codes');
+    const request = store.delete(key);
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
+  });
 }
 
 /**
  * 获取所有已存储的插件 key
  */
 export async function listStoredPlugins(): Promise<string[]> {
-  const database = await getDB();
-  const records = await database.getAllKeys('plugins');
-  return records as string[];
+  const db = await getDB();
+  
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('plugin_codes', 'readonly');
+    const store = tx.objectStore('plugin_codes');
+    const request = store.getAllKeys();
+    request.onsuccess = () => resolve(request.result as string[]);
+    request.onerror = () => reject(request.error);
+  });
 }
 
 // ===== 漫画缓存存储 =====
 
-const DEFAULT_CACHE_TTL = 60 * 60 * 1000; // 1小时
+const DEFAULT_CACHE_TTL = 60 * 60 * 1000; // 1 小时
 
 /**
  * 保存漫画缓存
@@ -155,15 +104,21 @@ export async function saveMangaCache(
   data: any,
   ttl: number = DEFAULT_CACHE_TTL
 ): Promise<void> {
-  const database = await getDB();
+  const db = await getDB();
   const key = `${pluginKey}:${comicId}`;
   const now = Date.now();
-
-  await database.put('manga_cache', {
-    key,
-    data,
-    expiresAt: now + ttl,
-    createdAt: now,
+  
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('manga_cache', 'readwrite');
+    const store = tx.objectStore('manga_cache');
+    const request = store.put({
+      key,
+      data,
+      expiresAt: now + ttl,
+      createdAt: now,
+    });
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
   });
 }
 
@@ -171,52 +126,102 @@ export async function saveMangaCache(
  * 加载漫画缓存
  */
 export async function loadMangaCache(pluginKey: string, comicId: string): Promise<any | null> {
-  const database = await getDB();
+  const db = await getDB();
   const key = `${pluginKey}:${comicId}`;
-  const record = await database.get('manga_cache', key);
-
-  if (!record) return null;
-
-  // 检查是否过期
-  if (record.expiresAt < Date.now()) {
-    await database.delete('manga_cache', key);
-    return null;
-  }
-
-  return record.data;
+  
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('manga_cache', 'readonly');
+    const store = tx.objectStore('manga_cache');
+    const request = store.get(key);
+    request.onsuccess = () => {
+      const record = request.result;
+      if (!record) {
+        resolve(null);
+        return;
+      }
+      // 检查是否过期
+      if (record.expiresAt < Date.now()) {
+        store.delete(key);
+        resolve(null);
+        return;
+      }
+      resolve(record.data);
+    };
+    request.onerror = () => reject(request.error);
+  });
 }
 
 /**
  * 删除漫画缓存
  */
 export async function deleteMangaCache(pluginKey: string, comicId: string): Promise<void> {
-  const database = await getDB();
+  const db = await getDB();
   const key = `${pluginKey}:${comicId}`;
-  await database.delete('manga_cache', key);
+  
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('manga_cache', 'readwrite');
+    const store = tx.objectStore('manga_cache');
+    const request = store.delete(key);
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
+  });
 }
 
 /**
- * 清理过期缓存
+ * 删除漫画缓存（支持后缀，如 comicId.info）
  */
-export async function clearExpiredCache(): Promise<void> {
-  const database = await getDB();
-  const now = Date.now();
-  const tx = database.transaction('manga_cache', 'readwrite');
-  const store = tx.objectStore('manga_cache');
-  const index = store.index('expiresAt');
+export async function deleteMangaCacheWithSuffix(pluginKey: string, comicId: string, suffix: string = ''): Promise<void> {
+  const db = await getDB();
+  const key = `${pluginKey}:${comicId}${suffix}`;
+  
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('manga_cache', 'readwrite');
+    const store = tx.objectStore('manga_cache');
+    const request = store.delete(key);
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
+  });
+}
 
-  const expiredKeys: string[] = [];
-  let cursor = await index.openCursor();
+/**
+ * 清理指定插件的所有漫画缓存
+ */
+export async function clearPluginMangaCache(pluginKey: string): Promise<void> {
+  const db = await getDB();
+  
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('manga_cache', 'readwrite');
+    const store = tx.objectStore('manga_cache');
+    const request = store.getAllKeys();
+    request.onsuccess = async () => {
+      const allKeys = request.result as string[];
+      for (const key of allKeys) {
+        if (typeof key === 'string' && key.startsWith(`${pluginKey}:`)) {
+          store.delete(key);
+        }
+      }
+      tx.oncomplete = () => resolve();
+    };
+    request.onerror = () => reject(request.error);
+  });
+}
 
-  while (cursor) {
-    if (cursor.value.expiresAt < now) {
-      expiredKeys.push(cursor.value.key);
-    }
-    cursor = await cursor.continue();
-  }
-
-  await Promise.all(expiredKeys.map(key => store.delete(key)));
-  await tx.done;
+/**
+ * 列出指定插件的所有缓存 key（用于调试）
+ */
+export async function listPluginCacheKeys(pluginKey: string): Promise<string[]> {
+  const db = await getDB();
+  
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('manga_cache', 'readonly');
+    const store = tx.objectStore('manga_cache');
+    const request = store.getAllKeys();
+    request.onsuccess = () => {
+      const allKeys = request.result as string[];
+      resolve(allKeys.filter(key => typeof key === 'string' && key.startsWith(`${pluginKey}:`)));
+    };
+    request.onerror = () => reject(request.error);
+  });
 }
 
 // ===== 插件设置存储 =====
@@ -231,9 +236,17 @@ export async function savePluginSetting(
   settingKey: string,
   value: any
 ): Promise<void> {
-  const database = await getDB();
+  const db = await getDB();
   const key = `${SETTING_KEY_PREFIX}${pluginKey}_${settingKey}`;
-  await database.put('settings', value, key);
+
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('plugin_settings', 'readwrite');
+    const store = tx.objectStore('plugin_settings');
+    // 使用内联键格式存储
+    const request = store.put({ key, value });
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
+  });
 }
 
 /**
@@ -243,9 +256,20 @@ export async function loadPluginSetting(
   pluginKey: string,
   settingKey: string
 ): Promise<any | null> {
-  const database = await getDB();
+  const db = await getDB();
   const key = `${SETTING_KEY_PREFIX}${pluginKey}_${settingKey}`;
-  return database.get('settings', key);
+
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('plugin_settings', 'readonly');
+    const store = tx.objectStore('plugin_settings');
+    const request = store.get(key);
+    request.onsuccess = () => {
+      const result = request.result;
+      // 如果是对象格式，返回 value 字段
+      resolve(result?.value ?? result ?? null);
+    };
+    request.onerror = () => reject(request.error);
+  });
 }
 
 /**
@@ -255,45 +279,179 @@ export async function deletePluginSetting(
   pluginKey: string,
   settingKey: string
 ): Promise<void> {
-  const database = await getDB();
+  const db = await getDB();
   const key = `${SETTING_KEY_PREFIX}${pluginKey}_${settingKey}`;
-  await database.delete('settings', key);
+
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('plugin_settings', 'readwrite');
+    const store = tx.objectStore('plugin_settings');
+    const request = store.delete(key);
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
+  });
 }
 
+// ===== 插件通用数据存储（IndexedDB，每个插件一条数据） =====
+
+const PLUGIN_DATA_KEY_PREFIX = 'plugin_data_';
+
 /**
- * 删除插件的所有设置
+ * 保存插件数据（IndexedDB 存储，每个插件一条数据）
  */
-export async function deleteAllPluginSettings(pluginKey: string): Promise<void> {
-  const database = await getDB();
-  const prefix = `${SETTING_KEY_PREFIX}${pluginKey}_`;
-  const keys = await database.getAllKeys('settings');
-  const pluginKeys = keys.filter((k) =>
-    typeof k === 'string' && k.startsWith(prefix)
-  );
-  await Promise.all(pluginKeys.map((key) => database.delete('settings', key)));
+export async function savePluginData(
+  pluginKey: string,
+  dataKey: string,
+  value: any
+): Promise<void> {
+  const db = await getDB();
+  const key = `${PLUGIN_DATA_KEY_PREFIX}${pluginKey}`;
+
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('plugin_settings', 'readwrite');
+    const store = tx.objectStore('plugin_settings');
+    
+    // 先获取现有数据
+    const getRequest = store.get(key);
+    getRequest.onsuccess = () => {
+      const existingData = getRequest.result?.data || {};
+      // 更新数据
+      const newData = { ...existingData, [dataKey]: value };
+      // 保存
+      const putRequest = store.put({ key, data: newData });
+      putRequest.onsuccess = () => resolve();
+      putRequest.onerror = () => reject(putRequest.error);
+    };
+    getRequest.onerror = () => reject(getRequest.error);
+  });
 }
 
-// ===== 源列表地址存储 =====
+/**
+ * 加载插件数据（IndexedDB 存储，每个插件一条数据）
+ */
+export async function loadPluginData(
+  pluginKey: string,
+  dataKey: string
+): Promise<any | null> {
+  const db = await getDB();
+  const key = `${PLUGIN_DATA_KEY_PREFIX}${pluginKey}`;
 
-const SOURCE_LIST_KEY = 'manga_reader_source_list_url';
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('plugin_settings', 'readonly');
+    const store = tx.objectStore('plugin_settings');
+    const request = store.get(key);
+    request.onsuccess = () => {
+      const result = request.result;
+      if (result?.data) {
+        resolve(result.data[dataKey] ?? null);
+      } else {
+        resolve(null);
+      }
+    };
+    request.onerror = () => reject(request.error);
+  });
+}
 
 /**
- * 保存源列表地址
+ * 批量加载插件所有数据
+ */
+export async function loadAllPluginData(pluginKey: string): Promise<Record<string, any>> {
+  const db = await getDB();
+  const key = `${PLUGIN_DATA_KEY_PREFIX}${pluginKey}`;
+
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('plugin_settings', 'readonly');
+    const store = tx.objectStore('plugin_settings');
+    const request = store.get(key);
+    request.onsuccess = () => {
+      const result = request.result;
+      resolve(result?.data || {});
+    };
+    request.onerror = () => reject(request.error);
+  });
+}
+
+/**
+ * 删除插件数据
+ */
+export async function deletePluginData(
+  pluginKey: string,
+  dataKey: string
+): Promise<void> {
+  const db = await getDB();
+  const key = `${PLUGIN_DATA_KEY_PREFIX}${pluginKey}`;
+
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('plugin_settings', 'readwrite');
+    const store = tx.objectStore('plugin_settings');
+    
+    const getRequest = store.get(key);
+    getRequest.onsuccess = () => {
+      const existingData = getRequest.result?.data || {};
+      delete existingData[dataKey];
+      const putRequest = store.put({ key, data: existingData });
+      putRequest.onsuccess = () => resolve();
+      putRequest.onerror = () => reject(putRequest.error);
+    };
+    getRequest.onerror = () => reject(getRequest.error);
+  });
+}
+
+/**
+ * 列出插件的所有数据 key（用于调试和清除）
+ */
+export async function listPluginDataKeys(pluginKey: string): Promise<string[]> {
+  const data = await loadAllPluginData(pluginKey);
+  return Object.keys(data);
+}
+
+/**
+ * 清除插件的所有数据
+ */
+export async function clearPluginData(pluginKey: string): Promise<number> {
+  const db = await getDB();
+  const key = `${PLUGIN_DATA_KEY_PREFIX}${pluginKey}`;
+
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('plugin_settings', 'readwrite');
+    const store = tx.objectStore('plugin_settings');
+    
+    const getRequest = store.get(key);
+    getRequest.onsuccess = () => {
+      const count = Object.keys(getRequest.result?.data || {}).length;
+      // 清空数据对象
+      const existing = getRequest.result;
+      if (existing) {
+        store.put({ key, data: {} });
+      }
+      resolve(count);
+    };
+    getRequest.onerror = () => reject(getRequest.error);
+  });
+}
+
+// ===== 源列表存储（兼容旧版） =====
+
+const SOURCE_LIST_URL_KEY = 'plugin_source_list_url';
+
+/**
+ * 保存源列表 URL
  */
 export function saveSourceListUrl(url: string): void {
-  localStorage.setItem(SOURCE_LIST_KEY, url);
+  localStorage.setItem(SOURCE_LIST_URL_KEY, url);
 }
 
 /**
- * 获取源列表地址
+ * 获取源列表 URL
  */
 export function getSourceListUrl(): string | null {
-  return localStorage.getItem(SOURCE_LIST_KEY);
+  return localStorage.getItem(SOURCE_LIST_URL_KEY);
 }
 
+// ===== 初始化（兼容旧版） =====
+
 /**
- * 清除源列表地址
+ * 初始化插件存储（空函数，保持兼容）
  */
-export function clearSourceListUrl(): void {
-  localStorage.removeItem(SOURCE_LIST_KEY);
+export async function initPluginStorage(): Promise<void> {
+  // 不需要初始化，使用统一的数据库
 }

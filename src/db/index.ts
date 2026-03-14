@@ -1,7 +1,7 @@
 /**
  * Manga Reader Database
  *
- * 使用框架的 IndexedDB ORM 封装
+ * 统一使用单个 IndexedDB 数据库，包含所有 store
  */
 
 import {
@@ -14,6 +14,10 @@ import {
 
 // 数据库实例
 let db: DatabaseManager | null = null;
+
+// 数据库名称和版本
+const DB_NAME = "manga-reader";
+const DB_VERSION = 4; // 增加版本以修复旧数据库缺少 store 的问题
 
 // 模型类型
 export interface MangaRecord extends ModelData {
@@ -114,7 +118,7 @@ export async function initDatabase(): Promise<void> {
 
   db = createDatabase({
     name: "manga-reader",
-    version: 2,
+    version: DB_VERSION,
     migrations: [
       {
         version: 1,
@@ -169,6 +173,70 @@ export async function initDatabase(): Promise<void> {
             action: "create",
             model: "chapter_lists",
             changes: { keyPath: "id" },
+          },
+        ],
+      },
+      {
+        version: 3,
+        description:
+          "Merge all stores: plugin_codes, manga_cache, plugin_settings, cache_index, file_cache",
+        steps: [
+          {
+            action: "create",
+            model: "plugin_codes",
+            changes: { keyPath: "key" },
+          },
+          {
+            action: "create",
+            model: "manga_cache",
+            changes: { keyPath: "key" },
+          },
+          {
+            action: "create",
+            model: "plugin_settings",
+            changes: { keyPath: "key" },
+          },
+          {
+            action: "create",
+            model: "cache_index",
+            changes: { keyPath: "mangaId" },
+          },
+          {
+            action: "create",
+            model: "file_cache",
+            changes: { keyPath: "key" },
+          },
+        ],
+      },
+      {
+        version: 4,
+        description: "Fix missing stores for existing v3 databases",
+        steps: [
+          // 这些 store 在 v3 时可能没有创建，这里确保它们存在
+          {
+            action: "create",
+            model: "plugin_codes",
+            changes: { keyPath: "key" },
+          },
+          {
+            action: "create",
+            model: "manga_cache",
+            changes: { keyPath: "key" },
+          },
+          {
+            action: "create",
+            model: "plugin_settings",
+            changes: { keyPath: "key" },
+          },
+          {
+            action: "create",
+            model: "cache_index",
+            changes: { keyPath: "mangaId" },
+          },
+          {
+            action: "create",
+            model: "file_cache",
+            changes: { keyPath: "key" },
           },
         ],
       },
