@@ -136,6 +136,7 @@ export function Reader({ mangaId, chapterId, pluginKey, page }: ReaderProps) {
   const [nextChapterImages, setNextChapterImages] = useState<string[]>([]);
   const [isLoadingNextChapter, setIsLoadingNextChapter] = useState(false);
   const [hasMoreChapters, setHasMoreChapters] = useState(true);
+  const [hasUserScrolled, setHasUserScrolled] = useState(false);  // 用户是否已经手动滚动过
 
   const containerRef = useRef<HTMLDivElement>(null);
   const webtoonRef = useRef<HTMLDivElement>(null);
@@ -157,6 +158,7 @@ export function Reader({ mangaId, chapterId, pluginKey, page }: ReaderProps) {
     setNextChapterImages([]);
     setHasMoreChapters(true);
     setIsLoadingNextChapter(false);
+    setHasUserScrolled(false);  // 重置用户滚动标志
     loadedChapterIds.current.clear();
     loadedChapterIds.current.add(chapterId);
 
@@ -189,29 +191,31 @@ export function Reader({ mangaId, chapterId, pluginKey, page }: ReaderProps) {
             actualPluginKey = parts[0] || pluginKey || "";
             actualExternalId = parts[1] || "";
           } else {
-            // 无法解析，尝试从缓存加载
-            if (pluginKey) {
-              const cached = await loadMangaCache(pluginKey, mangaId);
-              if (cached) {
-                mangaData = cached as MangaRecord;
-                actualPluginKey = pluginKey;
-                actualExternalId = mangaId;
-              }
+            // 无法解析，mangaId 就是 externalId
+            actualExternalId = mangaId;
+          }
+
+          // 从缓存加载漫画详情（包含标题等信息）
+          if (actualPluginKey && actualExternalId) {
+            const cached = await loadMangaCache(actualPluginKey, actualExternalId);
+            if (cached) {
+              mangaData = cached as MangaRecord;
             }
           }
 
-          if (!mangaData && !actualExternalId) {
+          if (!actualExternalId) {
             setError("漫画不存在");
             setLoading(false);
             return;
           }
 
-          // 如果缓存中有数据但没有加载到 mangaData，创建一个临时对象
+          // 如果缓存中没有数据，创建一个临时对象
           if (!mangaData && actualExternalId) {
             mangaData = {
               id: mangaId,
               pluginId: actualPluginKey || "",
               externalId: actualExternalId,
+              title: actualExternalId, // 使用 externalId 作为临时标题
             } as MangaRecord;
           }
         }
@@ -233,11 +237,15 @@ export function Reader({ mangaId, chapterId, pluginKey, page }: ReaderProps) {
           // chapterId 可能是 "chapter-6/manga-id" 或只是 "chapter-6"
           const chapterIdParts = chapterId?.split("/") || [];
           const simpleChapterId = chapterIdParts[0] || chapterId;
+          
+          // 尝试从章节 ID 解析标题（格式：chapter-33/the-female-delinquent-set-her-eyes-on-me-raw）
+          // 章节标题通常是第一部分
+          const chapterNumber = simpleChapterId.replace('chapter-', '') || simpleChapterId;
 
           currentCh = {
             id: chapterId,
-            number: 0,
-            title: `章节 ${simpleChapterId}`,
+            number: parseInt(chapterNumber, 10) || 0,
+            title: `章节 ${chapterNumber}`,
             isRead: false,
           } as MemoryChapter;
         }
@@ -286,9 +294,9 @@ export function Reader({ mangaId, chapterId, pluginKey, page }: ReaderProps) {
     };
   }, [mangaId, chapterId, page]);
 
-  // 当页面变化时，滚动到指定位置（Webtoon 模式）
+  // 当章节加载完成时，滚动到指定位置（Webtoon 模式）- 只触发一次
   useEffect(() => {
-    if (settings.webtoonMode && webtoonRef.current && processedImages.length > 0) {
+    if (settings.webtoonMode && webtoonRef.current && processedImages.length > 0 && currentPage > 0) {
       const images = webtoonRef.current.querySelectorAll('.webtoon-image');
       if (images[currentPage]) {
         // 等待一下让图片渲染完成
@@ -297,7 +305,7 @@ export function Reader({ mangaId, chapterId, pluginKey, page }: ReaderProps) {
         }, 100);
       }
     }
-  }, [currentPage, settings.webtoonMode, processedImages.length]);
+  }, [processedImages.length]);  // 只在图片加载完成时触发一次，而不是每次 currentPage 变化都触发
 
   // 清理 blob URL
   const cleanupBlobUrls = useCallback((images: ProcessedImage[]) => {
@@ -676,6 +684,12 @@ export function Reader({ mangaId, chapterId, pluginKey, page }: ReaderProps) {
     const scrollTop = container.scrollTop;
     const containerHeight = container.clientHeight;
 
+    // 如果用户滚动超过 100px，标记为已手动滚动
+    // 之后不再自动调整滚动位置
+    if (scrollTop > 100) {
+      setHasUserScrolled(true);
+    }
+
     // 计算当前页
     const images = container.querySelectorAll(".webtoon-image");
     let currentImgIndex = 0;
@@ -684,6 +698,10 @@ export function Reader({ mangaId, chapterId, pluginKey, page }: ReaderProps) {
       const img = images[i] as HTMLElement;
       const imgTop = img.offsetTop;
       const imgHeight = img.offsetHeight;
+
+      // 只有当图片高度大于 0 时才认为是已加载的
+      // 这样可以避免在图片加载过程中触发错误的页码计算
+      if (imgHeight <= 0) continue;
 
       if (
         scrollTop + containerHeight / 2 >= imgTop &&
@@ -694,8 +712,15 @@ export function Reader({ mangaId, chapterId, pluginKey, page }: ReaderProps) {
       }
     }
 
-    setCurrentPage(currentImgIndex);
-    saveProgress(currentImgIndex);
+    // 只在页码真正变化时才保存进度
+    // 避免在图片加载过程中频繁触发保存
+    setCurrentPage(prev => {
+      if (prev !== currentImgIndex) {
+        saveProgress(currentImgIndex);
+        return currentImgIndex;
+      }
+      return prev;
+    });
 
     // 检查是否滚动到底部，自动加载下一章
     const scrollBottom = scrollTop + containerHeight;
@@ -842,6 +867,19 @@ export function Reader({ mangaId, chapterId, pluginKey, page }: ReaderProps) {
   };
 
   const handleImageLoad = (index: number) => {
+    // 图片加载完成时，检查是否需要调整滚动位置
+    // 这是因为图片加载后高度变化可能导致页面跳动
+    // 只在用户没有手动滚动过，且是前几张图片加载时才调整
+    if (!hasUserScrolled && webtoonRef.current && index < 3) {
+      const container = webtoonRef.current;
+      const currentScroll = container.scrollTop;
+
+      // 使用 requestAnimationFrame 确保在下一帧恢复滚动位置
+      requestAnimationFrame(() => {
+        container.scrollTop = currentScroll;
+      });
+    }
+
     setLoadedImages((prev) => new Set([...prev, index]));
   };
 
@@ -937,19 +975,26 @@ export function Reader({ mangaId, chapterId, pluginKey, page }: ReaderProps) {
           <div class="w-full max-w-3xl mx-auto">
             {/* 当前章节图片 */}
             {processedImages.map((img, index) => (
-              <div key={`current-${index}`} class="webtoon-image w-full">
+              <div key={`current-${index}`} class="webtoon-image w-full relative bg-[#1a1a2e]">
+                {/* 加载指示器 - 使用绝对定位，不占据空间 */}
+                {!loadedImages.has(index) && (
+                  <div class="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
+                    <div class="w-6 h-6 border-2 border-[#e94560] border-t-transparent rounded-full animate-spin" />
+                  </div>
+                )}
+                {/* 实际图片 - 使用 min-height 避免高度为 0 */}
                 <img
                   src={img.url}
                   alt={`Page ${index + 1}`}
                   class="w-full h-auto block"
+                  style={{
+                    minHeight: index < 3 ? '200px' : '100px',
+                    opacity: loadedImages.has(index) ? 1 : 0.5,
+                    transition: 'opacity 0.2s ease-in-out'
+                  }}
                   loading={index < 3 ? "eager" : "lazy"}
                   onLoad={() => handleImageLoad(index)}
                 />
-                {!loadedImages.has(index) && (
-                  <div class="w-full h-96 bg-[#1a1a2e] flex items-center justify-center">
-                    <div class="w-6 h-6 border-2 border-[#e94560] border-t-transparent rounded-full animate-spin" />
-                  </div>
-                )}
               </div>
             ))}
 

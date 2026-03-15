@@ -513,12 +513,25 @@ export async function processImageLoad(
     // 处理后的URL（可能被插件修改）
     const finalUrl = config.url || url;
 
-    // 如果有 modifyImage 或 headers，需要下载并转换为 Blob URL
-    // 这样确保携带 referer 等 headers，并且可以利用缓存
-    if (config.modifyImage || config.headers) {
+    // 使用 getMediaProxyUrl 生成代理 URL
+    const proxyUrl = (window as any).getImageProxyUrl
+      ? (window as any).getImageProxyUrl(finalUrl, config.headers || {})
+      : finalUrl;
+
+    // 如果有 headers 但没有 modifyImage，直接返回代理 URL，不需要下载转换
+    if (config.headers && !config.modifyImage) {
+      return {
+        url: finalUrl,
+        headers: config.headers,
+      };
+    }
+
+    // 只有 config.modifyImage 存在时，才需要下载图片并使用 Canvas 处理
+    if (config.modifyImage) {
       try {
         // 使用 requestManager 下载图片（绕过 CORS）
         // 使用 arraybuffer 因为 GM adapter 不直接支持 blob
+        console.log(finalUrl);
         const response = await imageRequestManager.get<ArrayBuffer>(finalUrl, {
           headers: config.headers,
           responseType: "arraybuffer",
@@ -551,33 +564,22 @@ export async function processImageLoad(
         // 将 arraybuffer 转换为 blob
         const blob = new Blob([response.data]);
 
-        if (config.modifyImage) {
-          // 使用 Canvas 加载图片
-          const originalImage = await CanvasImage.fromBlob(blob);
+        // 使用 Canvas 加载图片
+        const originalImage = await CanvasImage.fromBlob(blob);
+        // 执行 modifyImage 函数
+        // modifyImage 是一个字符串，包含函数定义
+        const modifyFunction = new Function(
+          "image",
+          config.modifyImage + "\nreturn modifyImage(image);",
+        );
+        const modifiedImage = modifyFunction(originalImage);
 
-          // 执行 modifyImage 函数
-          // modifyImage 是一个字符串，包含函数定义
-          const modifyFunction = new Function(
-            "image",
-            config.modifyImage + "\nreturn modifyImage(image);",
-          );
-          const modifiedImage = modifyFunction(originalImage);
+        if (modifiedImage && modifiedImage instanceof CanvasImage) {
+          // 转换为 Blob URL
+          const mimeType = blob.type || "image/png";
+          const modifiedBlob = await modifiedImage.toBlob(mimeType);
+          const blobUrl = URL.createObjectURL(modifiedBlob);
 
-          if (modifiedImage && modifiedImage instanceof CanvasImage) {
-            // 转换为 Blob URL
-            const mimeType = blob.type || "image/png";
-            const modifiedBlob = await modifiedImage.toBlob(mimeType);
-            const blobUrl = URL.createObjectURL(modifiedBlob);
-
-            return {
-              url: finalUrl,
-              headers: config.headers,
-              blobUrl,
-            };
-          }
-        } else {
-          // 没有 modifyImage，但有 headers，直接返回 Blob URL
-          const blobUrl = URL.createObjectURL(blob);
           return {
             url: finalUrl,
             headers: config.headers,
@@ -585,14 +587,18 @@ export async function processImageLoad(
           };
         }
       } catch (e) {
-        console.error("[processImageLoad] Failed to download/modify image:", e);
-        // 修改失败，返回原始 URL
-        return { url: finalUrl, headers: config.headers };
+        console.error(
+          "[processImageLoad] Failed to download/modify image:",
+          e,
+          finalUrl,
+        );
+        // 修改失败，返回代理 URL（让代理服务器处理）
+        return { url: proxyUrl, headers: config.headers };
       }
     }
 
     // 没有 modifyImage 和 headers，只返回 URL
-    return { url: finalUrl };
+    return { url: proxyUrl };
   } catch (e) {
     console.error("[processImageLoad] Error:", e);
     return { url };

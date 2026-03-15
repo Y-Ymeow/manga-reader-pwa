@@ -108,7 +108,10 @@ export class MangaCacheManager {
     // 清理路径中的非法字符
     const safeMangaId = mangaId.replace(/[^a-zA-Z0-9_-]/g, '_');
     const safeChapterId = chapterId.replace(/[^a-zA-Z0-9_-]/g, '_');
-    return `${safeMangaId}/${safeChapterId}/${index}.webp`;
+    // 使用零填充格式（4 位数字），确保文件排序正确（0000, 0001, 0002...）
+    // 这样可以避免移动端读取时出现 1, 10, 11, 2, 3... 的乱序问题
+    const paddedIndex = index.toString().padStart(4, '0');
+    return `${safeMangaId}/${safeChapterId}/${paddedIndex}.webp`;
   }
 
   /**

@@ -3,6 +3,7 @@ import { resolve } from 'path';
 import preact from '@preact/preset-vite';
 import tailwindcss from '@tailwindcss/vite';
 import { VitePWA } from 'vite-plugin-pwa';
+import pkg from './package.json';
 
 export default defineConfig({
   // GitHub Pages 项目页面需要设置基础路径
@@ -62,6 +63,7 @@ export default defineConfig({
         name: 'Manga Reader',
         short_name: 'MangaReader',
         description: 'A PWA manga reader with plugin support',
+        version: pkg.version,
         theme_color: '#1a1a2e',
         background_color: '#1a1a2e',
         display: 'standalone',
