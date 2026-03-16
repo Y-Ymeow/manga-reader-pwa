@@ -13,6 +13,7 @@ interface HistoryItem {
   chapterTitle: string;
   page: number;
   readAt: number;
+  pluginKey?: string;
 }
 
 export function History() {
@@ -65,6 +66,7 @@ export function History() {
             chapterTitle,
             page: record.page,
             readAt: record.readAt,
+            pluginKey: manga.pluginId,
           });
         }
       }
@@ -82,10 +84,11 @@ export function History() {
   };
 
   const handleContinue = (item: HistoryItem) => {
-    navigate('reader', { 
-      mangaId: item.mangaId, 
+    navigate('reader', {
+      mangaId: item.mangaId,
       chapterId: item.chapterId,
       page: String(item.page),
+      pluginKey: item.pluginKey || '',
     });
   };
 

@@ -10,9 +10,15 @@ import {
   restorePluginsFromStorage,
   revokeImageBlobUrl,
 } from "@plugins/index";
-  import { Manga, ChapterList, ReadHistory, Cache, initDatabase } from "@db/index";
-  import { getCacheManager } from "../fs/cache-manager";
-  import { getCacheIndex } from "../fs/cache-index";
+import {
+  Manga,
+  ChapterList,
+  ReadHistory,
+  Cache,
+  initDatabase,
+} from "@db/index";
+import { getCacheManager } from "../fs/cache-manager";
+import { getCacheIndex } from "../fs/cache-index";
 import type { MangaRecord, ChapterListRecord } from "@db/index";
 import { waitForDatabase } from "@db/global";
 
@@ -20,7 +26,7 @@ interface ReaderProps {
   mangaId?: string;
   chapterId?: string;
   pluginKey?: string;
-  page?: string;  // 从历史记录传入的初始页码
+  page?: string; // 从历史记录传入的初始页码
 }
 
 interface ReaderSettings {
@@ -109,13 +115,13 @@ interface MemoryChapter {
   isRead?: boolean;
 }
 
-  // 处理后的图片信息
+// 处理后的图片信息
 interface ProcessedImage {
-  url: string;           // 最终使用的 URL (可能是 blobUrl 或原 URL)
-  originalUrl: string;   // 原始 URL
-  blobUrl?: string;      // 如果有修改，这是 blob URL
+  url: string; // 最终使用的 URL (可能是 blobUrl 或原 URL)
+  originalUrl: string; // 原始 URL
+  blobUrl?: string; // 如果有修改，这是 blob URL
   headers?: Record<string, string>;
-  isOffline?: boolean;   // 是否来自离线缓存
+  isOffline?: boolean; // 是否来自离线缓存
 }
 
 export function Reader({ mangaId, chapterId, pluginKey, page }: ReaderProps) {
@@ -136,7 +142,7 @@ export function Reader({ mangaId, chapterId, pluginKey, page }: ReaderProps) {
   const [nextChapterImages, setNextChapterImages] = useState<string[]>([]);
   const [isLoadingNextChapter, setIsLoadingNextChapter] = useState(false);
   const [hasMoreChapters, setHasMoreChapters] = useState(true);
-  const [hasUserScrolled, setHasUserScrolled] = useState(false);  // 用户是否已经手动滚动过
+  const [hasUserScrolled, setHasUserScrolled] = useState(false); // 用户是否已经手动滚动过
 
   const containerRef = useRef<HTMLDivElement>(null);
   const webtoonRef = useRef<HTMLDivElement>(null);
@@ -149,6 +155,7 @@ export function Reader({ mangaId, chapterId, pluginKey, page }: ReaderProps) {
   }, [processedImages]);
   // 加载漫画和章节数据
   useEffect(() => {
+    console.log("data: ", mangaId, chapterId, pluginKey, page);
     if (!mangaId || !chapterId) {
       setLoading(false);
       return;
@@ -158,7 +165,7 @@ export function Reader({ mangaId, chapterId, pluginKey, page }: ReaderProps) {
     setNextChapterImages([]);
     setHasMoreChapters(true);
     setIsLoadingNextChapter(false);
-    setHasUserScrolled(false);  // 重置用户滚动标志
+    setHasUserScrolled(false); // 重置用户滚动标志
     loadedChapterIds.current.clear();
     loadedChapterIds.current.add(chapterId);
 
@@ -197,9 +204,14 @@ export function Reader({ mangaId, chapterId, pluginKey, page }: ReaderProps) {
 
           // 从缓存加载漫画详情（包含标题等信息）
           if (actualPluginKey && actualExternalId) {
-            const cached = await loadMangaCache(actualPluginKey, actualExternalId);
+            const cached = await loadMangaCache(
+              actualPluginKey,
+              actualExternalId,
+            );
             if (cached) {
               mangaData = cached as MangaRecord;
+              mangaData.pluginId = actualPluginKey;
+              mangaData.externalId = actualExternalId;
             }
           }
 
@@ -237,10 +249,11 @@ export function Reader({ mangaId, chapterId, pluginKey, page }: ReaderProps) {
           // chapterId 可能是 "chapter-6/manga-id" 或只是 "chapter-6"
           const chapterIdParts = chapterId?.split("/") || [];
           const simpleChapterId = chapterIdParts[0] || chapterId;
-          
+
           // 尝试从章节 ID 解析标题（格式：chapter-33/the-female-delinquent-set-her-eyes-on-me-raw）
           // 章节标题通常是第一部分
-          const chapterNumber = simpleChapterId.replace('chapter-', '') || simpleChapterId;
+          const chapterNumber =
+            simpleChapterId.replace("chapter-", "") || simpleChapterId;
 
           currentCh = {
             id: chapterId,
@@ -264,7 +277,7 @@ export function Reader({ mangaId, chapterId, pluginKey, page }: ReaderProps) {
 
         // 恢复阅读进度
         // 优先使用传入的 page 参数（来自历史记录），其次从数据库恢复
-        if (page !== undefined && page !== '') {
+        if (page !== undefined && page !== "") {
           const pageNum = parseInt(page, 10);
           if (!isNaN(pageNum) && pageNum >= 0) {
             setCurrentPage(pageNum);
@@ -296,20 +309,28 @@ export function Reader({ mangaId, chapterId, pluginKey, page }: ReaderProps) {
 
   // 当章节加载完成时，滚动到指定位置（Webtoon 模式）- 只触发一次
   useEffect(() => {
-    if (settings.webtoonMode && webtoonRef.current && processedImages.length > 0 && currentPage > 0) {
-      const images = webtoonRef.current.querySelectorAll('.webtoon-image');
+    if (
+      settings.webtoonMode &&
+      webtoonRef.current &&
+      processedImages.length > 0 &&
+      currentPage > 0
+    ) {
+      const images = webtoonRef.current.querySelectorAll(".webtoon-image");
       if (images[currentPage]) {
         // 等待一下让图片渲染完成
         setTimeout(() => {
-          images[currentPage].scrollIntoView({ behavior: 'smooth', block: 'start' });
+          images[currentPage].scrollIntoView({
+            behavior: "smooth",
+            block: "start",
+          });
         }, 100);
       }
     }
-  }, [processedImages.length]);  // 只在图片加载完成时触发一次，而不是每次 currentPage 变化都触发
+  }, [processedImages.length]); // 只在图片加载完成时触发一次，而不是每次 currentPage 变化都触发
 
   // 清理 blob URL
   const cleanupBlobUrls = useCallback((images: ProcessedImage[]) => {
-    images.forEach(img => {
+    images.forEach((img) => {
       if (img.blobUrl) {
         // 如果是离线缓存的 Blob URL，直接 revoke
         if (img.isOffline) {
@@ -333,14 +354,28 @@ export function Reader({ mangaId, chapterId, pluginKey, page }: ReaderProps) {
     // 先检查缓存索引（包含图片 URL 结构，不需要再请求远程）
     if (mangaData.externalId) {
       const cacheIndex = getCacheIndex();
-      const cachedImageUrls = await cacheIndex.getChapterImageUrls(mangaData.externalId, chapterData.id);
+      const cachedImageUrls = await cacheIndex.getChapterImageUrls(
+        mangaData.externalId,
+        chapterData.id,
+      );
 
       if (cachedImageUrls && cachedImageUrls.length > 0) {
-        console.log('[Reader] Using cached image URLs from index:', cachedImageUrls.length);
+        console.log(
+          "[Reader] Using cached image URLs from index:",
+          cachedImageUrls.length,
+        );
         // 更新最后访问时间
-        await cacheIndex.updateLastAccessed(mangaData.externalId, chapterData.id);
+        await cacheIndex.updateLastAccessed(
+          mangaData.externalId,
+          chapterData.id,
+        );
         // 使用缓存的图片 URL 处理
-        await processImageUrls(mangaData.pluginId || pluginKey || '', mangaData.externalId, chapterData.id, cachedImageUrls);
+        await processImageUrls(
+          mangaData.pluginId || pluginKey || "",
+          mangaData.externalId,
+          chapterData.id,
+          cachedImageUrls,
+        );
         return;
       }
     }
@@ -348,8 +383,13 @@ export function Reader({ mangaId, chapterId, pluginKey, page }: ReaderProps) {
     // 尝试从旧的内存缓存加载（兼容旧数据）
     const cached = await getCachedChapterImages(chapterData.id);
     if (cached && cached.length > 0) {
-      console.log('[Reader] Using old cached image URLs:', cached.length);
-      await processImageUrls(pluginKey ?? "", mangaData.externalId || '', chapterData.id, cached);
+      console.log("[Reader] Using old cached image URLs:", cached.length);
+      await processImageUrls(
+        mangaData.pluginId || pluginKey || "",
+        mangaData.externalId || "",
+        chapterData.id,
+        cached,
+      );
       return;
     }
 
@@ -366,11 +406,17 @@ export function Reader({ mangaId, chapterId, pluginKey, page }: ReaderProps) {
         // 缓存原始图片 URL
         await cacheChapterImages(chapterData.id, imageUrls);
         // 处理图片 URL（应用 onImageLoad）
-        await processImageUrls(mangaData.pluginId, mangaData.externalId, chapterData.id, imageUrls);
+        await processImageUrls(
+          mangaData.pluginId,
+          mangaData.externalId,
+          chapterData.id,
+          imageUrls,
+        );
       } catch (e: any) {
         setError("加载图片失败: " + e.message);
       }
     } else {
+      console.error("无法加载图片：缺少插件信息", mangaData);
       setError("无法加载图片：缺少插件信息");
     }
   };
@@ -382,7 +428,11 @@ export function Reader({ mangaId, chapterId, pluginKey, page }: ReaderProps) {
   const processedChapterIds = useRef<Set<string>>(new Set()); // 已处理的章节 ID，避免重复加载
 
   // 获取离线缓存的图片
-  const getOfflineImageUrl = async (mangaExternalId: string, chapterId: string, index: number): Promise<string | null> => {
+  const getOfflineImageUrl = async (
+    mangaExternalId: string,
+    chapterId: string,
+    index: number,
+  ): Promise<string | null> => {
     try {
       const cacheManager = getCacheManager();
       await cacheManager.init();
@@ -390,7 +440,9 @@ export function Reader({ mangaId, chapterId, pluginKey, page }: ReaderProps) {
       const cached = await cacheManager.read(mangaExternalId, chapterId, index);
       if (cached) {
         // 将 Uint8Array 转换为 Blob URL
-        const blob = new Blob([cached.data.buffer as ArrayBuffer], { type: cached.contentType });
+        const blob = new Blob([cached.data.buffer as ArrayBuffer], {
+          type: cached.contentType,
+        });
         return URL.createObjectURL(blob);
       }
       return null;
@@ -403,16 +455,25 @@ export function Reader({ mangaId, chapterId, pluginKey, page }: ReaderProps) {
     pluginId: string,
     comicId: string,
     chapterId: string,
-    urls: string[]
+    urls: string[],
   ) => {
     try {
       // 提取真正的 epId（只取 / 前面的部分）
-      const epId = chapterId.includes('/') ? chapterId.split('/')[0] : chapterId;
-      console.log('[processImageUrls] chapterId:', chapterId, '-> epId:', epId, 'total:', urls.length);
+      const epId = chapterId.includes("/")
+        ? chapterId.split("/")[0]
+        : chapterId;
+      console.log(
+        "[processImageUrls] chapterId:",
+        chapterId,
+        "-> epId:",
+        epId,
+        "total:",
+        urls.length,
+      );
       // 检查是否已处理过这个章节，避免重复加载
       const chapterCacheKey = `${comicId}_${chapterId}`;
       if (processedChapterIds.current.has(chapterCacheKey)) {
-        console.log('[processImageUrls] Chapter already processed, skipping');
+        console.log("[processImageUrls] Chapter already processed, skipping");
         return;
       }
       processedChapterIds.current.add(chapterCacheKey);
@@ -459,8 +520,8 @@ export function Reader({ mangaId, chapterId, pluginKey, page }: ReaderProps) {
         const url = urls[i];
         try {
           const result = await processImageLoad(pluginId, url, comicId, epId);
-          
-          setProcessedImages(prev => {
+
+          setProcessedImages((prev) => {
             const updated = [...prev];
             updated[i] = {
               url: result.blobUrl || result.url,
@@ -472,64 +533,75 @@ export function Reader({ mangaId, chapterId, pluginKey, page }: ReaderProps) {
           });
         } catch (e: any) {
           // CF 挑战会触发全局回调，这里只需要停止处理
-          if (e.message?.startsWith('CF_CHALLENGE:')) {
+          if (e.message?.startsWith("CF_CHALLENGE:")) {
             break; // 停止处理后续图片
           }
           console.error(`[processImageUrls] Failed to load image ${i}:`, e);
         }
       }
-
     } catch (e) {
-      console.error('Failed to process image URLs:', e);
+      console.error("Failed to process image URLs:", e);
       // 如果处理失败，使用原始 URL
-      setProcessedImages(urls.map(url => ({ url, originalUrl: url })));
+      setProcessedImages(urls.map((url) => ({ url, originalUrl: url })));
     }
   };
 
   // 处理指定索引附近的图片（懒加载）
-  const processNearbyImages = useCallback(async (centerIndex: number) => {
-    if (!manga?.pluginId || !manga?.externalId || !chapter) return;
+  const processNearbyImages = useCallback(
+    async (centerIndex: number) => {
+      if (!manga?.pluginId || !manga?.externalId || !chapter) return;
 
-    const epId = chapter.id.includes('/') ? chapter.id.split('/')[0] : chapter.id;
-    const indicesToProcess: number[] = [];
+      const epId = chapter.id.includes("/")
+        ? chapter.id.split("/")[0]
+        : chapter.id;
+      const indicesToProcess: number[] = [];
 
-    // 收集需要处理的附近图片索引
-    for (let i = -1; i <= 1; i++) {
-      const idx = centerIndex + i;
-      if (idx >= 0 && pendingUrlsRef.current.has(idx)) {
-        indicesToProcess.push(idx);
+      // 收集需要处理的附近图片索引
+      for (let i = -1; i <= 1; i++) {
+        const idx = centerIndex + i;
+        if (idx >= 0 && pendingUrlsRef.current.has(idx)) {
+          indicesToProcess.push(idx);
+        }
       }
-    }
 
-    if (indicesToProcess.length === 0) return;
+      if (indicesToProcess.length === 0) return;
 
+      // 处理这些图片
+      for (const idx of indicesToProcess) {
+        const url = pendingUrlsRef.current.get(idx);
+        if (!url) continue;
 
-    // 处理这些图片
-    for (const idx of indicesToProcess) {
-      const url = pendingUrlsRef.current.get(idx);
-      if (!url) continue;
+        // 从待处理列表中移除
+        pendingUrlsRef.current.delete(idx);
 
-      // 从待处理列表中移除
-      pendingUrlsRef.current.delete(idx);
-
-      try {
-        const result = await processImageLoad(manga.pluginId, url, manga.externalId, epId);
-        setProcessedImages(prev => {
-          if (idx >= prev.length) return prev;
-          const updated = [...prev];
-          updated[idx] = {
-            url: result.blobUrl || result.url,
-            originalUrl: url,
-            blobUrl: result.blobUrl,
-            headers: result.headers,
-          };
-          return updated;
-        });
-      } catch (e) {
-        console.error(`[processNearbyImages] Failed to process image ${idx}:`, e);
+        try {
+          const result = await processImageLoad(
+            manga.pluginId,
+            url,
+            manga.externalId,
+            epId,
+          );
+          setProcessedImages((prev) => {
+            if (idx >= prev.length) return prev;
+            const updated = [...prev];
+            updated[idx] = {
+              url: result.blobUrl || result.url,
+              originalUrl: url,
+              blobUrl: result.blobUrl,
+              headers: result.headers,
+            };
+            return updated;
+          });
+        } catch (e) {
+          console.error(
+            `[processNearbyImages] Failed to process image ${idx}:`,
+            e,
+          );
+        }
       }
-    }
-  }, [manga, chapter]);
+    },
+    [manga, chapter],
+  );
 
   // 保存阅读进度
   const saveProgress = useCallback(
@@ -620,7 +692,7 @@ export function Reader({ mangaId, chapterId, pluginKey, page }: ReaderProps) {
       });
     } else {
       // 已经是最后一章
-      alert('已经是最后一章了');
+      alert("已经是最后一章了");
     }
   }, [chapter, chapters, chapterReverseOrder, mangaId]);
 
@@ -714,7 +786,7 @@ export function Reader({ mangaId, chapterId, pluginKey, page }: ReaderProps) {
 
     // 只在页码真正变化时才保存进度
     // 避免在图片加载过程中频繁触发保存
-    setCurrentPage(prev => {
+    setCurrentPage((prev) => {
       if (prev !== currentImgIndex) {
         saveProgress(currentImgIndex);
         return currentImgIndex;
@@ -975,7 +1047,10 @@ export function Reader({ mangaId, chapterId, pluginKey, page }: ReaderProps) {
           <div class="w-full max-w-3xl mx-auto">
             {/* 当前章节图片 */}
             {processedImages.map((img, index) => (
-              <div key={`current-${index}`} class="webtoon-image w-full relative bg-[#1a1a2e]">
+              <div
+                key={`current-${index}`}
+                class="webtoon-image w-full relative bg-[#1a1a2e]"
+              >
                 {/* 加载指示器 - 使用绝对定位，不占据空间 */}
                 {!loadedImages.has(index) && (
                   <div class="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
@@ -988,9 +1063,9 @@ export function Reader({ mangaId, chapterId, pluginKey, page }: ReaderProps) {
                   alt={`Page ${index + 1}`}
                   class="w-full h-auto block"
                   style={{
-                    minHeight: index < 3 ? '200px' : '100px',
+                    minHeight: index < 3 ? "200px" : "100px",
                     opacity: loadedImages.has(index) ? 1 : 0.5,
-                    transition: 'opacity 0.2s ease-in-out'
+                    transition: "opacity 0.2s ease-in-out",
                   }}
                   loading={index < 3 ? "eager" : "lazy"}
                   onLoad={() => handleImageLoad(index)}
@@ -1060,23 +1135,32 @@ export function Reader({ mangaId, chapterId, pluginKey, page }: ReaderProps) {
             <div
               class="flex-1 h-1 bg-gray-600 rounded-full overflow-hidden cursor-pointer"
               onClick={(e) => {
-                const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                const rect = (
+                  e.currentTarget as HTMLElement
+                ).getBoundingClientRect();
                 const x = e.clientX - rect.left;
                 const percentage = x / rect.width;
                 const newPage = Math.floor(percentage * totalPages);
-                const targetPage = Math.max(0, Math.min(totalPages - 1, newPage));
+                const targetPage = Math.max(
+                  0,
+                  Math.min(totalPages - 1, newPage),
+                );
                 setCurrentPage(targetPage);
                 saveProgress(targetPage);
-                
+
                 // 滚动到指定图片
                 if (settings.webtoonMode && webtoonRef.current) {
-                  const images = webtoonRef.current.querySelectorAll('.webtoon-image');
+                  const images =
+                    webtoonRef.current.querySelectorAll(".webtoon-image");
                   if (images[targetPage]) {
-                    images[targetPage].scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    images[targetPage].scrollIntoView({
+                      behavior: "smooth",
+                      block: "start",
+                    });
                   }
                 } else if (containerRef.current) {
                   // 普通模式：滚动容器到顶部（因为图片是居中显示的）
-                  containerRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+                  containerRef.current.scrollTo({ top: 0, behavior: "smooth" });
                 }
               }}
             >
