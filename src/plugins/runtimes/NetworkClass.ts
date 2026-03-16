@@ -38,11 +38,11 @@ export class NetworkClass {
         }
       }
       const response = await requestManager.get(url, { headers });
-      
+
       // 检测 Cloudflare 挑战页面
       if (response.status === 403 || response.status === 503) {
         const responseText = typeof response.data === 'string' ? response.data : '';
-        if (responseText.includes('cdn-cgi/challenge-platform') || 
+        if (responseText.includes('cdn-cgi/challenge-platform') ||
             responseText.includes('Just a moment') ||
             responseText.includes('cf_chl')) {
           console.log('[Network] Detected CF challenge:', url);
@@ -53,7 +53,7 @@ export class NetworkClass {
           throw new Error(`CF_CHALLENGE:${url}`);
         }
       }
-      
+
       return {
         status: response.status,
         body: typeof response.data === 'string' ? response.data : JSON.stringify(response.data),
@@ -62,6 +62,15 @@ export class NetworkClass {
       // CF 挑战错误直接抛出
       if (error.message?.startsWith('CF_CHALLENGE:')) {
         throw error;
+      }
+      // 请求错误时，如果状态码是 403/503，也触发 CF 挑战提示
+      // 因为错误时拿不到响应内容，所以只要状态码符合就认为是 CF 挑战
+      if (error.status === 403 || error.status === 503) {
+        console.log('[Network] Detected CF challenge (error status):', url);
+        import('../../components/CfChallengeModal').then(({ triggerCfChallenge }) => {
+          triggerCfChallenge(url);
+        });
+        throw new Error(`CF_CHALLENGE:${url}`);
       }
       return { status: error.status || 0, body: error.message || 'Network error' };
     }
@@ -83,11 +92,11 @@ export class NetworkClass {
         }
       }
       const response = await requestManager.post(url, body, { headers });
-      
+
       // 检测 Cloudflare 挑战页面
       if (response.status === 403 || response.status === 503) {
         const responseText = typeof response.data === 'string' ? response.data : '';
-        if (responseText.includes('cdn-cgi/challenge-platform') || 
+        if (responseText.includes('cdn-cgi/challenge-platform') ||
             responseText.includes('Just a moment') ||
             responseText.includes('cf_chl')) {
           console.log('[Network] Detected CF challenge:', url);
@@ -98,7 +107,7 @@ export class NetworkClass {
           throw new Error(`CF_CHALLENGE:${url}`);
         }
       }
-      
+
       return {
         status: response.status,
         body: typeof response.data === 'string' ? response.data : JSON.stringify(response.data),
@@ -107,6 +116,15 @@ export class NetworkClass {
       // CF 挑战错误直接抛出
       if (error.message?.startsWith('CF_CHALLENGE:')) {
         throw error;
+      }
+      // 请求错误时，如果状态码是 403/503，也触发 CF 挑战提示
+      // 因为错误时拿不到响应内容，所以只要状态码符合就认为是 CF 挑战
+      if (error.status === 403 || error.status === 503) {
+        console.log('[Network] Detected CF challenge (error status):', url);
+        import('../../components/CfChallengeModal').then(({ triggerCfChallenge }) => {
+          triggerCfChallenge(url);
+        });
+        throw new Error(`CF_CHALLENGE:${url}`);
       }
       return { status: error.status || 0, body: error.message || 'Network error' };
     }
