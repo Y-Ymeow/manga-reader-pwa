@@ -548,7 +548,8 @@ export function Reader({ mangaId, chapterId, pluginKey, page }: ReaderProps) {
   };
 
   // 处理指定索引附近的图片（懒加载）
-  // 当用户接近未处理的图片时，持续加载下一批，保持始终有 BATCH_SIZE 张缓冲
+  // 提前预加载：当用户浏览到 倒数第 2 张已处理图片 时，开始加载下一批
+  // 这样保证用户看到最后 1 张时，下一批已经加载完成，不会卡顿
   const processNearbyImages = useCallback(async (centerIndex: number) => {
     if (!manga?.pluginId || !manga?.externalId || !chapter) return;
 
@@ -556,14 +557,14 @@ export function Reader({ mangaId, chapterId, pluginKey, page }: ReaderProps) {
       ? chapter.id.split("/")[0]
       : chapter.id;
 
-    // 检查当前页之后是否还有足够的缓冲
-    // 如果已处理的图片数量 <= currentPage + BATCH_SIZE，继续加载
-    const needMoreBuffer = processedImages.length <= centerIndex + BATCH_SIZE;
-    if (!needMoreBuffer) return;
+    // 提前触发：当 当前页 >= 已处理数量 - 2 时，开始加载下一批
+    // 例如：已处理 5 张，浏览到第 3 张 (index=2) 时就开始加载
+    const preloadThreshold = Math.max(0, processedImages.length - 2);
+    if (centerIndex < preloadThreshold) return;
 
     // 从待处理列表中按顺序加载下一批图片（每次加载 PRELOAD_BATCH_SIZE 张）
     const indicesToProcess: number[] = [];
-    const startIndex = centerIndex + 1; // 从当前页的下一页开始
+    const startIndex = processedImages.length; // 从已处理的最后一张之后开始
 
     for (let i = startIndex; i < startIndex + PRELOAD_BATCH_SIZE && i < images.length; i++) {
       if (pendingUrlsRef.current.has(i)) {
