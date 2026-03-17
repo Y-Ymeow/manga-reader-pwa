@@ -477,6 +477,17 @@ if (externalAdapter) {
   imageRequestManager.register(new FetchAdapter());
 }
 
+export function getImageProxyUrl(url: string, headers = {}) {
+  const params = new URLSearchParams();
+  params.append("url", url);
+
+  // 添加自定义 headers 到 URL 参数
+  Object.entries(headers).forEach(([key, value]: [string, any]) => {
+    params.append(`header_${key}`, value);
+  });
+
+  return `http://localhost:19315/api/proxy?${params.toString()}`;
+}
 /**
  * 处理图片加载
  * 调用插件的 onImageLoad 方法获取配置，并执行图片修改
@@ -514,9 +525,7 @@ export async function processImageLoad(
     const finalUrl = config.url || url;
 
     // 使用 getMediaProxyUrl 生成代理 URL
-    const proxyUrl = (window as any).getImageProxyUrl
-      ? (window as any).getImageProxyUrl(finalUrl, config.headers || {})
-      : finalUrl;
+    const proxyUrl = getImageProxyUrl(finalUrl, config.headers || {});
 
     // 如果有 headers 但没有 modifyImage，直接返回代理 URL，不需要下载转换
     if (config.headers && !config.modifyImage) {
