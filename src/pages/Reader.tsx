@@ -547,61 +547,65 @@ export function Reader({ mangaId, chapterId, pluginKey, page }: ReaderProps) {
   };
 
   // 处理指定索引附近的图片（懒加载）
-  const processNearbyImages = useCallback(
-    async (centerIndex: number) => {
-      if (!manga?.pluginId || !manga?.externalId || !chapter) return;
+  // 当用户接近未处理的图片时，持续加载下一页，保持始终有 BATCH_SIZE 张缓冲
+  const processNearbyImages = useCallback(async (centerIndex: number) => {
+    if (!manga?.pluginId || !manga?.externalId || !chapter) return;
 
-      const epId = chapter.id.includes("/")
-        ? chapter.id.split("/")[0]
-        : chapter.id;
-      const indicesToProcess: number[] = [];
+    const epId = chapter.id.includes("/")
+      ? chapter.id.split("/")[0]
+      : chapter.id;
 
-      // 收集需要处理的附近图片索引
-      for (let i = -1; i <= 1; i++) {
-        const idx = centerIndex + i;
-        if (idx >= 0 && pendingUrlsRef.current.has(idx)) {
-          indicesToProcess.push(idx);
-        }
+    // 检查当前页之后是否还有足够的缓冲
+    // 如果已处理的图片数量 <= currentPage + BATCH_SIZE，继续加载
+    const needMoreBuffer = processedImages.length <= centerIndex + BATCH_SIZE;
+    if (!needMoreBuffer) return;
+
+    // 从待处理列表中按顺序加载下一批图片
+    const indicesToProcess: number[] = [];
+    const startIndex = centerIndex + 1; // 从当前页的下一页开始
+
+    for (let i = startIndex; i < startIndex + BATCH_SIZE && i < images.length; i++) {
+      if (pendingUrlsRef.current.has(i)) {
+        indicesToProcess.push(i);
       }
+    }
 
-      if (indicesToProcess.length === 0) return;
+    if (indicesToProcess.length === 0) return;
 
-      // 处理这些图片
-      for (const idx of indicesToProcess) {
-        const url = pendingUrlsRef.current.get(idx);
-        if (!url) continue;
+    // 处理这些图片
+    for (const idx of indicesToProcess) {
+      const url = pendingUrlsRef.current.get(idx);
+      if (!url) continue;
 
-        // 从待处理列表中移除
-        pendingUrlsRef.current.delete(idx);
+      // 从待处理列表中移除
+      pendingUrlsRef.current.delete(idx);
 
-        try {
-          const result = await processImageLoad(
-            manga.pluginId,
-            url,
-            manga.externalId,
-            epId,
-          );
-          setProcessedImages((prev) => {
-            if (idx >= prev.length) return prev;
-            const updated = [...prev];
-            updated[idx] = {
-              url: result.blobUrl || result.url,
-              originalUrl: url,
-              blobUrl: result.blobUrl,
-              headers: result.headers,
-            };
-            return updated;
-          });
-        } catch (e) {
-          console.error(
-            `[processNearbyImages] Failed to process image ${idx}:`,
-            e,
-          );
-        }
+      try {
+        const result = await processImageLoad(
+          manga.pluginId,
+          url,
+          manga.externalId,
+          epId,
+        );
+        setProcessedImages((prev) => {
+          if (idx >= prev.length) return prev;
+          const updated = [...prev];
+          updated[idx] = {
+            url: result.blobUrl || result.url,
+            originalUrl: url,
+            blobUrl: result.blobUrl,
+            headers: result.headers,
+          };
+          return updated;
+        });
+      } catch (e) {
+        console.error(
+          `[processNearbyImages] Failed to process image ${idx}:`,
+          e,
+        );
       }
-    },
-    [manga, chapter],
-  );
+    }
+  }, [manga, chapter, processedImages.length, images.length]);
 
   // 保存阅读进度
   const saveProgress = useCallback(
