@@ -530,7 +530,7 @@ export async function processImageLoad(
     // 如果有 headers 但没有 modifyImage，直接返回代理 URL，不需要下载转换
     if (config.headers && !config.modifyImage) {
       return {
-        url: finalUrl,
+        url: proxyUrl,
         headers: config.headers,
       };
     }
@@ -540,7 +540,6 @@ export async function processImageLoad(
       try {
         // 使用 requestManager 下载图片（绕过 CORS）
         // 使用 arraybuffer 因为 GM adapter 不直接支持 blob
-        console.log(finalUrl);
         const response = await imageRequestManager.get<ArrayBuffer>(finalUrl, {
           headers: config.headers,
           responseType: "arraybuffer",
