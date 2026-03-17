@@ -128,9 +128,9 @@ export async function saveMangaCache(
 export async function loadMangaCache(pluginKey: string, comicId: string): Promise<any | null> {
   const db = await getDB();
   const key = `${pluginKey}:${comicId}`;
-  
+
   return new Promise((resolve, reject) => {
-    const tx = db.transaction('manga_cache', 'readonly');
+    const tx = db.transaction('manga_cache', 'readwrite');
     const store = tx.objectStore('manga_cache');
     const request = store.get(key);
     request.onsuccess = () => {
