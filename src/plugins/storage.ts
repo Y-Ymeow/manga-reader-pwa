@@ -1,15 +1,83 @@
 /**
  * 插件存储管理
- * 统一使用 manga-reader 数据库的 store
+ * Tauri 环境：使用 SQLite EAV（通过 localStorage 或直接调用）
+ * 浏览器环境：使用 IndexedDB
  */
 
+import { isTauri } from '../db/adapter';
 import { waitForDatabase } from '../db/global';
 
-// 使用统一的数据库
+// ==================== Tauri SQLite EAV 存储 ====================
+
+// Tauri 环境下使用 EAV 存储
+function getSQLiteEAV() {
+  if (!isTauri()) return null;
+  const win = window as unknown as { __TAURI__?: { invoke: Function; _ready: boolean }; tauri?: { invoke: Function; _ready: boolean } };
+  const tauri = win.__TAURI__ || win.tauri;
+  if (!tauri?._ready) return null;
+  
+  return {
+    async upsert(table: string, dataId: string, data: any): Promise<boolean> {
+      const result = await tauri.invoke('sqlite_upsert', {
+        dbName: 'manga-reader',
+        tableName: table,
+        dataId,
+        data,
+      });
+      return result.success ? result.data : false;
+    },
+    async findOne(table: string, dataId: string): Promise<any> {
+      const result = await tauri.invoke('sqlite_find_one', {
+        dbName: 'manga-reader',
+        tableName: table,
+        dataId,
+      });
+      const rawData = result.success ? result.data : null;
+      // Rust 返回的数据可能是嵌套结构，需要解包并转换字段名
+      if (!rawData) return null;
+      return {
+        dataId: rawData.data_id,
+        createdAt: rawData.created_at,
+        updatedAt: rawData.updated_at,
+        data: rawData.data,
+      };
+    },
+    async find(table: string, options?: { filter?: Record<string, any> }): Promise<any[]> {
+      const result = await tauri.invoke('sqlite_find', {
+        dbName: 'manga-reader',
+        tableName: table,
+        filter: options?.filter || null,
+        options: { order_by: null, desc: false, limit: null, offset: null },
+      });
+      const rawData = result.success ? result.data : [];
+      // Rust 返回的数据可能是嵌套结构，需要解包并转换字段名
+      let records: any[] = [];
+      if (rawData && Array.isArray(rawData)) {
+        records = rawData.map((item: any) => ({
+          dataId: item.data_id,
+          createdAt: item.created_at,
+          updatedAt: item.updated_at,
+          data: item.data,
+        }));
+      }
+      return records;
+    },
+    async delete(table: string, dataId: string): Promise<boolean> {
+      const result = await tauri.invoke('sqlite_delete', {
+        dbName: 'manga-reader',
+        tableName: table,
+        dataId,
+      });
+      return result.success ? result.data : false;
+    },
+  };
+}
+
+// ==================== IndexedDB 实现 ====================
+
 async function getDB(): Promise<IDBDatabase> {
   await waitForDatabase();
   return new Promise((resolve, reject) => {
-    // 不指定版本，让浏览器使用最新版本
     const request = indexedDB.open('manga-reader');
     request.onerror = () => reject(request.error);
     request.onsuccess = () => resolve(request.result);
@@ -18,27 +86,24 @@ async function getDB(): Promise<IDBDatabase> {
 
 // ===== 插件代码存储 =====
 
-/**
- * 保存插件代码
- */
 export async function savePluginCode(key: string, code: string): Promise<void> {
+  if (isTauri()) {
+    const eav = getSQLiteEAV();
+    if (eav) {
+      await eav.upsert('plugin_codes', key, { code });
+      return;
+    }
+  }
+  
   const db = await getDB();
   const now = Date.now();
-  
-  return new Promise((resolve, reject) => {
+  return new Promise<void>((resolve, reject) => {
     const tx = db.transaction('plugin_codes', 'readwrite');
     const store = tx.objectStore('plugin_codes');
-    
-    // 先获取现有记录
     const getRequest = store.get(key);
     getRequest.onsuccess = () => {
       const existing = getRequest.result;
-      const putRequest = store.put({
-        key,
-        code,
-        installedAt: existing?.installedAt || now,
-        updatedAt: now,
-      });
+      const putRequest = store.put({ key, code, installedAt: existing?.installedAt || now, updatedAt: now });
       putRequest.onsuccess = () => resolve();
       putRequest.onerror = () => reject(putRequest.error);
     };
@@ -46,12 +111,22 @@ export async function savePluginCode(key: string, code: string): Promise<void> {
   });
 }
 
-/**
- * 加载插件代码
- */
 export async function loadPluginCode(key: string): Promise<string | null> {
+  if (isTauri()) {
+    const eav = getSQLiteEAV();
+    if (eav) {
+      try {
+        const record = await eav.findOne('plugin_codes', key);
+        // record 格式：{ dataId, createdAt, updatedAt, data: { code: '...' } }
+        return record?.data?.code ?? null;
+      } catch (e) {
+        console.error('[loadPluginCode] Tauri error:', e);
+        return null;
+      }
+    }
+  }
+
   const db = await getDB();
-  
   return new Promise((resolve, reject) => {
     const tx = db.transaction('plugin_codes', 'readonly');
     const store = tx.objectStore('plugin_codes');
@@ -61,13 +136,17 @@ export async function loadPluginCode(key: string): Promise<string | null> {
   });
 }
 
-/**
- * 删除插件代码
- */
 export async function deletePluginCode(key: string): Promise<void> {
-  const db = await getDB();
+  if (isTauri()) {
+    const eav = getSQLiteEAV();
+    if (eav) {
+      await eav.delete('plugin_codes', key);
+      return;
+    }
+  }
   
-  return new Promise((resolve, reject) => {
+  const db = await getDB();
+  return new Promise<void>((resolve, reject) => {
     const tx = db.transaction('plugin_codes', 'readwrite');
     const store = tx.objectStore('plugin_codes');
     const request = store.delete(key);
@@ -76,12 +155,18 @@ export async function deletePluginCode(key: string): Promise<void> {
   });
 }
 
-/**
- * 获取所有已存储的插件 key
- */
 export async function listStoredPlugins(): Promise<string[]> {
+  if (isTauri()) {
+    const eav = getSQLiteEAV();
+    if (eav) {
+      const records = await eav.find('plugin_codes');
+      // records 格式：[{ dataId, createdAt, updatedAt, data }, ...]
+      return records.map(r => r.dataId).filter(Boolean);
+    }
+    return [];
+  }
+
   const db = await getDB();
-  
   return new Promise((resolve, reject) => {
     const tx = db.transaction('plugin_codes', 'readonly');
     const store = tx.objectStore('plugin_codes');
@@ -95,70 +180,77 @@ export async function listStoredPlugins(): Promise<string[]> {
 
 const DEFAULT_CACHE_TTL = 60 * 60 * 1000; // 1 小时
 
-/**
- * 保存漫画缓存
- */
-export async function saveMangaCache(
-  pluginKey: string,
-  comicId: string,
-  data: any,
-  ttl: number = DEFAULT_CACHE_TTL
-): Promise<void> {
+export async function saveMangaCache(pluginKey: string, comicId: string, data: any, ttl: number = DEFAULT_CACHE_TTL): Promise<void> {
+  if (isTauri()) {
+    const eav = getSQLiteEAV();
+    if (eav) {
+      const key = `${pluginKey}:${comicId}`;
+      const now = Date.now();
+      const existing = await eav.findOne('manga_cache', key);
+      if (existing) {
+        await eav.upsert('manga_cache', key, { data, expiresAt: now + ttl, createdAt: existing.data?.createdAt || now });
+      } else {
+        await eav.upsert('manga_cache', key, { data, expiresAt: now + ttl, createdAt: now });
+      }
+      return;
+    }
+  }
+  
   const db = await getDB();
   const key = `${pluginKey}:${comicId}`;
   const now = Date.now();
-  
-  return new Promise((resolve, reject) => {
+  return new Promise<void>((resolve, reject) => {
     const tx = db.transaction('manga_cache', 'readwrite');
     const store = tx.objectStore('manga_cache');
-    const request = store.put({
-      key,
-      data,
-      expiresAt: now + ttl,
-      createdAt: now,
-    });
+    const request = store.put({ key, data, expiresAt: now + ttl, createdAt: now });
     request.onsuccess = () => resolve();
     request.onerror = () => reject(request.error);
   });
 }
 
-/**
- * 加载漫画缓存
- */
 export async function loadMangaCache(pluginKey: string, comicId: string): Promise<any | null> {
+  if (isTauri()) {
+    const eav = getSQLiteEAV();
+    if (eav) {
+      const key = `${pluginKey}:${comicId}`;
+      const record = await eav.findOne('manga_cache', key);
+      if (!record?.data) return null;
+      if (record.data.expiresAt < Date.now()) {
+        await eav.delete('manga_cache', key);
+        return null;
+      }
+      return record.data.data;
+    }
+  }
+  
   const db = await getDB();
   const key = `${pluginKey}:${comicId}`;
-
   return new Promise((resolve, reject) => {
     const tx = db.transaction('manga_cache', 'readwrite');
     const store = tx.objectStore('manga_cache');
     const request = store.get(key);
     request.onsuccess = () => {
       const record = request.result;
-      if (!record) {
-        resolve(null);
-        return;
-      }
-      // 检查是否过期
-      if (record.expiresAt < Date.now()) {
-        store.delete(key);
-        resolve(null);
-        return;
-      }
+      if (!record) { resolve(null); return; }
+      if (record.expiresAt < Date.now()) { store.delete(key); resolve(null); return; }
       resolve(record.data);
     };
     request.onerror = () => reject(request.error);
   });
 }
 
-/**
- * 删除漫画缓存
- */
 export async function deleteMangaCache(pluginKey: string, comicId: string): Promise<void> {
+  if (isTauri()) {
+    const eav = getSQLiteEAV();
+    if (eav) {
+      await eav.delete('manga_cache', `${pluginKey}:${comicId}`);
+      return;
+    }
+  }
+  
   const db = await getDB();
   const key = `${pluginKey}:${comicId}`;
-  
-  return new Promise((resolve, reject) => {
+  return new Promise<void>((resolve, reject) => {
     const tx = db.transaction('manga_cache', 'readwrite');
     const store = tx.objectStore('manga_cache');
     const request = store.delete(key);
@@ -167,29 +259,26 @@ export async function deleteMangaCache(pluginKey: string, comicId: string): Prom
   });
 }
 
-/**
- * 删除漫画缓存（支持后缀，如 comicId.info）
- */
 export async function deleteMangaCacheWithSuffix(pluginKey: string, comicId: string, suffix: string = ''): Promise<void> {
-  const db = await getDB();
-  const key = `${pluginKey}:${comicId}${suffix}`;
-  
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction('manga_cache', 'readwrite');
-    const store = tx.objectStore('manga_cache');
-    const request = store.delete(key);
-    request.onsuccess = () => resolve();
-    request.onerror = () => reject(request.error);
-  });
+  return deleteMangaCache(pluginKey, comicId + suffix);
 }
 
-/**
- * 清理指定插件的所有漫画缓存
- */
 export async function clearPluginMangaCache(pluginKey: string): Promise<void> {
-  const db = await getDB();
+  if (isTauri()) {
+    const eav = getSQLiteEAV();
+    if (eav) {
+      const records = await eav.find('manga_cache');
+      for (const record of records) {
+        if (record.dataId.startsWith(`${pluginKey}:`)) {
+          await eav.delete('manga_cache', record.dataId);
+        }
+      }
+      return;
+    }
+  }
   
-  return new Promise((resolve, reject) => {
+  const db = await getDB();
+  return new Promise<void>((resolve, reject) => {
     const tx = db.transaction('manga_cache', 'readwrite');
     const store = tx.objectStore('manga_cache');
     const request = store.getAllKeys();
@@ -206,12 +295,17 @@ export async function clearPluginMangaCache(pluginKey: string): Promise<void> {
   });
 }
 
-/**
- * 列出指定插件的所有缓存 key（用于调试）
- */
 export async function listPluginCacheKeys(pluginKey: string): Promise<string[]> {
-  const db = await getDB();
+  if (isTauri()) {
+    const eav = getSQLiteEAV();
+    if (eav) {
+      const records = await eav.find('manga_cache');
+      return records.filter(r => r.dataId.startsWith(`${pluginKey}:`)).map(r => r.dataId);
+    }
+    return [];
+  }
   
+  const db = await getDB();
   return new Promise((resolve, reject) => {
     const tx = db.transaction('manga_cache', 'readonly');
     const store = tx.objectStore('manga_cache');
@@ -228,61 +322,68 @@ export async function listPluginCacheKeys(pluginKey: string): Promise<string[]> 
 
 const SETTING_KEY_PREFIX = 'plugin_setting_';
 
-/**
- * 保存插件设置
- */
-export async function savePluginSetting(
-  pluginKey: string,
-  settingKey: string,
-  value: any
-): Promise<void> {
+export async function savePluginSetting(pluginKey: string, settingKey: string, value: any): Promise<void> {
+  if (isTauri()) {
+    const eav = getSQLiteEAV();
+    if (eav) {
+      const key = `${SETTING_KEY_PREFIX}${pluginKey}_${settingKey}`;
+      const existing = await eav.findOne('plugin_settings', key);
+      if (existing) {
+        await eav.upsert('plugin_settings', key, { value });
+      } else {
+        await eav.upsert('plugin_settings', key, { value });
+      }
+      return;
+    }
+  }
+  
   const db = await getDB();
   const key = `${SETTING_KEY_PREFIX}${pluginKey}_${settingKey}`;
-
-  return new Promise((resolve, reject) => {
+  return new Promise<void>((resolve, reject) => {
     const tx = db.transaction('plugin_settings', 'readwrite');
     const store = tx.objectStore('plugin_settings');
-    // 使用内联键格式存储
     const request = store.put({ key, value });
     request.onsuccess = () => resolve();
     request.onerror = () => reject(request.error);
   });
 }
 
-/**
- * 加载插件设置
- */
-export async function loadPluginSetting(
-  pluginKey: string,
-  settingKey: string
-): Promise<any | null> {
+export async function loadPluginSetting(pluginKey: string, settingKey: string): Promise<any | null> {
+  if (isTauri()) {
+    const eav = getSQLiteEAV();
+    if (eav) {
+      const key = `${SETTING_KEY_PREFIX}${pluginKey}_${settingKey}`;
+      const record = await eav.findOne('plugin_settings', key);
+      return record?.data?.value ?? null;
+    }
+  }
+  
   const db = await getDB();
   const key = `${SETTING_KEY_PREFIX}${pluginKey}_${settingKey}`;
-
   return new Promise((resolve, reject) => {
     const tx = db.transaction('plugin_settings', 'readonly');
     const store = tx.objectStore('plugin_settings');
     const request = store.get(key);
     request.onsuccess = () => {
       const result = request.result;
-      // 如果是对象格式，返回 value 字段
       resolve(result?.value ?? result ?? null);
     };
     request.onerror = () => reject(request.error);
   });
 }
 
-/**
- * 删除插件设置
- */
-export async function deletePluginSetting(
-  pluginKey: string,
-  settingKey: string
-): Promise<void> {
+export async function deletePluginSetting(pluginKey: string, settingKey: string): Promise<void> {
+  if (isTauri()) {
+    const eav = getSQLiteEAV();
+    if (eav) {
+      await eav.delete('plugin_settings', `${SETTING_KEY_PREFIX}${pluginKey}_${settingKey}`);
+      return;
+    }
+  }
+  
   const db = await getDB();
   const key = `${SETTING_KEY_PREFIX}${pluginKey}_${settingKey}`;
-
-  return new Promise((resolve, reject) => {
+  return new Promise<void>((resolve, reject) => {
     const tx = db.transaction('plugin_settings', 'readwrite');
     const store = tx.objectStore('plugin_settings');
     const request = store.delete(key);
@@ -291,32 +392,32 @@ export async function deletePluginSetting(
   });
 }
 
-// ===== 插件通用数据存储（IndexedDB，每个插件一条数据） =====
+// ===== 插件通用数据存储 =====
 
 const PLUGIN_DATA_KEY_PREFIX = 'plugin_data_';
 
-/**
- * 保存插件数据（IndexedDB 存储，每个插件一条数据）
- */
-export async function savePluginData(
-  pluginKey: string,
-  dataKey: string,
-  value: any
-): Promise<void> {
+export async function savePluginData(pluginKey: string, dataKey: string, value: any): Promise<void> {
+  if (isTauri()) {
+    const eav = getSQLiteEAV();
+    if (eav) {
+      const key = `${PLUGIN_DATA_KEY_PREFIX}${pluginKey}`;
+      const existing = await eav.findOne('plugin_settings', key);
+      const existingData = existing?.data?.data || {};
+      const newData = { ...existingData, [dataKey]: value };
+      await eav.upsert('plugin_settings', key, { data: newData });
+      return;
+    }
+  }
+  
   const db = await getDB();
   const key = `${PLUGIN_DATA_KEY_PREFIX}${pluginKey}`;
-
-  return new Promise((resolve, reject) => {
+  return new Promise<void>((resolve, reject) => {
     const tx = db.transaction('plugin_settings', 'readwrite');
     const store = tx.objectStore('plugin_settings');
-    
-    // 先获取现有数据
     const getRequest = store.get(key);
     getRequest.onsuccess = () => {
       const existingData = getRequest.result?.data || {};
-      // 更新数据
       const newData = { ...existingData, [dataKey]: value };
-      // 保存
       const putRequest = store.put({ key, data: newData });
       putRequest.onsuccess = () => resolve();
       putRequest.onerror = () => reject(putRequest.error);
@@ -325,16 +426,21 @@ export async function savePluginData(
   });
 }
 
-/**
- * 加载插件数据（IndexedDB 存储，每个插件一条数据）
- */
-export async function loadPluginData(
-  pluginKey: string,
-  dataKey: string
-): Promise<any | null> {
+export async function loadPluginData(pluginKey: string, dataKey: string): Promise<any | null> {
+  if (isTauri()) {
+    const eav = getSQLiteEAV();
+    if (eav) {
+      const key = `${PLUGIN_DATA_KEY_PREFIX}${pluginKey}`;
+      const record = await eav.findOne('plugin_settings', key);
+      if (record?.data?.data) {
+        return record.data.data[dataKey] ?? null;
+      }
+      return null;
+    }
+  }
+  
   const db = await getDB();
   const key = `${PLUGIN_DATA_KEY_PREFIX}${pluginKey}`;
-
   return new Promise((resolve, reject) => {
     const tx = db.transaction('plugin_settings', 'readonly');
     const store = tx.objectStore('plugin_settings');
@@ -351,13 +457,19 @@ export async function loadPluginData(
   });
 }
 
-/**
- * 批量加载插件所有数据
- */
 export async function loadAllPluginData(pluginKey: string): Promise<Record<string, any>> {
+  if (isTauri()) {
+    const eav = getSQLiteEAV();
+    if (eav) {
+      const key = `${PLUGIN_DATA_KEY_PREFIX}${pluginKey}`;
+      const record = await eav.findOne('plugin_settings', key);
+      return record?.data?.data || {};
+    }
+    return {};
+  }
+  
   const db = await getDB();
   const key = `${PLUGIN_DATA_KEY_PREFIX}${pluginKey}`;
-
   return new Promise((resolve, reject) => {
     const tx = db.transaction('plugin_settings', 'readonly');
     const store = tx.objectStore('plugin_settings');
@@ -370,20 +482,24 @@ export async function loadAllPluginData(pluginKey: string): Promise<Record<strin
   });
 }
 
-/**
- * 删除插件数据
- */
-export async function deletePluginData(
-  pluginKey: string,
-  dataKey: string
-): Promise<void> {
+export async function deletePluginData(pluginKey: string, dataKey: string): Promise<void> {
+  if (isTauri()) {
+    const eav = getSQLiteEAV();
+    if (eav) {
+      const key = `${PLUGIN_DATA_KEY_PREFIX}${pluginKey}`;
+      const existing = await eav.findOne('plugin_settings', key);
+      const existingData = existing?.data?.data || {};
+      delete existingData[dataKey];
+      await eav.upsert('plugin_settings', key, { data: existingData });
+      return;
+    }
+  }
+  
   const db = await getDB();
   const key = `${PLUGIN_DATA_KEY_PREFIX}${pluginKey}`;
-
-  return new Promise((resolve, reject) => {
+  return new Promise<void>((resolve, reject) => {
     const tx = db.transaction('plugin_settings', 'readwrite');
     const store = tx.objectStore('plugin_settings');
-    
     const getRequest = store.get(key);
     getRequest.onsuccess = () => {
       const existingData = getRequest.result?.data || {};
@@ -396,29 +512,32 @@ export async function deletePluginData(
   });
 }
 
-/**
- * 列出插件的所有数据 key（用于调试和清除）
- */
 export async function listPluginDataKeys(pluginKey: string): Promise<string[]> {
   const data = await loadAllPluginData(pluginKey);
   return Object.keys(data);
 }
 
-/**
- * 清除插件的所有数据
- */
 export async function clearPluginData(pluginKey: string): Promise<number> {
+  if (isTauri()) {
+    const eav = getSQLiteEAV();
+    if (eav) {
+      const key = `${PLUGIN_DATA_KEY_PREFIX}${pluginKey}`;
+      const record = await eav.findOne('plugin_settings', key);
+      const count = Object.keys(record?.data?.data || {}).length;
+      await eav.upsert('plugin_settings', key, { data: {} });
+      return count;
+    }
+    return 0;
+  }
+  
   const db = await getDB();
   const key = `${PLUGIN_DATA_KEY_PREFIX}${pluginKey}`;
-
   return new Promise((resolve, reject) => {
     const tx = db.transaction('plugin_settings', 'readwrite');
     const store = tx.objectStore('plugin_settings');
-    
     const getRequest = store.get(key);
     getRequest.onsuccess = () => {
       const count = Object.keys(getRequest.result?.data || {}).length;
-      // 清空数据对象
       const existing = getRequest.result;
       if (existing) {
         store.put({ key, data: {} });
@@ -429,29 +548,27 @@ export async function clearPluginData(pluginKey: string): Promise<number> {
   });
 }
 
-// ===== 源列表存储（兼容旧版） =====
+// ===== 源列表存储（使用 localStorage） =====
 
 const SOURCE_LIST_URL_KEY = 'plugin_source_list_url';
 
-/**
- * 保存源列表 URL
- */
-export function saveSourceListUrl(url: string): void {
-  localStorage.setItem(SOURCE_LIST_URL_KEY, url);
+export async function saveSourceListUrl(url: string): Promise<void> {
+  const result: any = localStorage.setItem(SOURCE_LIST_URL_KEY, url);
+  if (result instanceof Promise) {
+    await result;
+  }
 }
 
-/**
- * 获取源列表 URL
- */
-export function getSourceListUrl(): string | null {
-  return localStorage.getItem(SOURCE_LIST_URL_KEY);
+export async function getSourceListUrl(): Promise<string | null> {
+  const result: any = localStorage.getItem(SOURCE_LIST_URL_KEY);
+  if (result instanceof Promise) {
+    return await result;
+  }
+  return result;
 }
 
-// ===== 初始化（兼容旧版） =====
+// ===== 初始化 =====
 
-/**
- * 初始化插件存储（空函数，保持兼容）
- */
 export async function initPluginStorage(): Promise<void> {
-  // 不需要初始化，使用统一的数据库
+  // 不需要初始化
 }

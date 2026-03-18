@@ -47,7 +47,7 @@ export function Plugins() {
       installedPluginKeys = new Set(storedKeys);
 
       // 加载保存的源列表地址
-      const savedUrl = getSavedSourceListUrl();
+      const savedUrl = await getSavedSourceListUrl();
       if (savedUrl) {
         setSourceListUrl(savedUrl);
         // 自动加载源列表

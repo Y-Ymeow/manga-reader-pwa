@@ -2,8 +2,10 @@
  * Manga Reader Database
  *
  * 统一使用单个 IndexedDB 数据库，包含所有 store
+ * Tauri 环境下使用 SQLite，不创建 plugin_codes 等 store
  */
 
+import { isTauri } from './adapter';
 import {
   DatabaseManager,
   createDatabase,
@@ -11,6 +13,8 @@ import {
   field,
   type ModelData,
 } from "../framework/indexeddb";
+import { UnifiedModel } from './unified-model';
+import { setGlobalBridge } from '../framework/sqlite';
 
 // 数据库实例
 let db: DatabaseManager | null = null;
@@ -19,7 +23,7 @@ let db: DatabaseManager | null = null;
 const DB_NAME = "manga-reader";
 const DB_VERSION = 4; // 增加版本以修复旧数据库缺少 store 的问题
 
-// 模型类型
+// 模型类型（使用 UnifiedModel 支持双后端）
 export interface MangaRecord extends ModelData {
   id: string;
   title: string;
@@ -51,6 +55,7 @@ export interface ChapterListRecord extends ModelData {
     number: number;
     isRead?: boolean;
     readAt?: number;
+    fetchedAt?: number; // 章节获取时间
   }>;
   updatedAt: number;
 }
@@ -101,20 +106,32 @@ export interface UpdateRecord extends ModelData {
   isRead: boolean;
 }
 
-// 模型实例
-export let Manga: Model<MangaRecord>;
-export let ChapterList: Model<ChapterListRecord>;
-export let Category: Model<CategoryRecord>;
-export let ReadHistory: Model<ReadHistoryRecord>;
-export let Plugin: Model<PluginRecord>;
-export let Cache: Model<CacheRecord>;
-export let Update: Model<UpdateRecord>;
+// 模型实例（使用 UnifiedModel 支持双后端）
+export let Manga: UnifiedModel<MangaRecord>;
+export let ChapterList: UnifiedModel<ChapterListRecord>;
+export let Category: UnifiedModel<CategoryRecord>;
+export let ReadHistory: UnifiedModel<ReadHistoryRecord>;
+export let Plugin: UnifiedModel<PluginRecord>;
+export let Cache: UnifiedModel<CacheRecord>;
+export let Update: UnifiedModel<UpdateRecord>;
 
 /**
  * 初始化数据库
  */
 export async function initDatabase(): Promise<void> {
   if (db) return;
+
+  // Tauri 环境下初始化 SQLite bridge
+  if (isTauri()) {
+    const win = window as unknown as { __TAURI__?: { invoke: Function; _ready: boolean }; tauri?: { invoke: Function; _ready: boolean } };
+    const tauri = win.__TAURI__ || win.tauri;
+    if (tauri?._ready) {
+      // 包装为 SQLiteBridge 接口
+      setGlobalBridge({
+        invoke: tauri.invoke.bind(tauri),
+      } as any);
+    }
+  }
 
   db = createDatabase({
     name: "manga-reader",
@@ -181,63 +198,68 @@ export async function initDatabase(): Promise<void> {
         description:
           "Merge all stores: plugin_codes, manga_cache, plugin_settings, cache_index, file_cache",
         steps: [
-          {
-            action: "create",
-            model: "plugin_codes",
-            changes: { keyPath: "key" },
-          },
-          {
-            action: "create",
-            model: "manga_cache",
-            changes: { keyPath: "key" },
-          },
-          {
-            action: "create",
-            model: "plugin_settings",
-            changes: { keyPath: "key" },
-          },
-          {
-            action: "create",
-            model: "cache_index",
-            changes: { keyPath: "mangaId" },
-          },
-          {
-            action: "create",
-            model: "file_cache",
-            changes: { keyPath: "key" },
-          },
+          // Tauri 环境下不创建这些 store，使用 SQLite
+          ...(isTauri() ? [] : [
+            {
+              action: "create" as const,
+              model: "plugin_codes",
+              changes: { keyPath: "key" },
+            },
+            {
+              action: "create" as const,
+              model: "manga_cache",
+              changes: { keyPath: "key" },
+            },
+            {
+              action: "create" as const,
+              model: "plugin_settings",
+              changes: { keyPath: "key" },
+            },
+            {
+              action: "create" as const,
+              model: "cache_index",
+              changes: { keyPath: "mangaId" },
+            },
+            {
+              action: "create" as const,
+              model: "file_cache",
+              changes: { keyPath: "key" },
+            },
+          ]),
         ],
       },
       {
         version: 4,
         description: "Fix missing stores for existing v3 databases",
         steps: [
-          // 这些 store 在 v3 时可能没有创建，这里确保它们存在
-          {
-            action: "create",
-            model: "plugin_codes",
-            changes: { keyPath: "key" },
-          },
-          {
-            action: "create",
-            model: "manga_cache",
-            changes: { keyPath: "key" },
-          },
-          {
-            action: "create",
-            model: "plugin_settings",
-            changes: { keyPath: "key" },
-          },
-          {
-            action: "create",
-            model: "cache_index",
-            changes: { keyPath: "mangaId" },
-          },
-          {
-            action: "create",
-            model: "file_cache",
-            changes: { keyPath: "key" },
-          },
+          // Tauri 环境下不创建这些 store，使用 SQLite
+          ...(isTauri() ? [] : [
+            {
+              action: "create" as const,
+              model: "plugin_codes",
+              changes: { keyPath: "key" },
+            },
+            {
+              action: "create" as const,
+              model: "manga_cache",
+              changes: { keyPath: "key" },
+            },
+            {
+              action: "create" as const,
+              model: "plugin_settings",
+              changes: { keyPath: "key" },
+            },
+            {
+              action: "create" as const,
+              model: "cache_index",
+              changes: { keyPath: "mangaId" },
+            },
+            {
+              action: "create" as const,
+              model: "file_cache",
+              changes: { keyPath: "key" },
+            },
+          ]),
         ],
       },
     ],
@@ -245,8 +267,8 @@ export async function initDatabase(): Promise<void> {
 
   await db.init();
 
-  // 初始化模型
-  Manga = new Model<MangaRecord>(db, "mangas", {
+  // 初始化模型（使用 UnifiedModel 支持双后端）
+  const idbManga = new Model<MangaRecord>(db, "mangas", {
     id: field.uuid(),
     title: field.string({ required: true }),
     cover: field.string({ required: true }),
@@ -265,33 +287,37 @@ export async function initDatabase(): Promise<void> {
     createdAt: field.number({ default: () => Date.now() }),
     updatedAt: field.number({ default: () => Date.now() }),
   });
+  Manga = new UnifiedModel<MangaRecord>(idbManga, "mangas");
 
-  ChapterList = new Model<ChapterListRecord>(db, "chapter_lists", {
+  const idbChapterList = new Model<ChapterListRecord>(db, "chapter_lists", {
     id: field.uuid(),
     mangaId: field.string({ required: true }),
     chapters: field.json({ default: () => [] }),
     updatedAt: field.number({ default: () => Date.now() }),
   });
+  ChapterList = new UnifiedModel<ChapterListRecord>(idbChapterList, "chapter_lists");
 
-  Category = new Model<CategoryRecord>(db, "categories", {
+  const idbCategory = new Model<CategoryRecord>(db, "categories", {
     id: field.uuid(),
     name: field.string({ required: true }),
     sort: field.number({ default: () => 0 }),
     createdAt: field.number({ default: () => Date.now() }),
   });
+  Category = new UnifiedModel<CategoryRecord>(idbCategory, "categories");
 
-  ReadHistory = new Model<ReadHistoryRecord>(db, "read_history", {
+  const idbReadHistory = new Model<ReadHistoryRecord>(db, "read_history", {
     id: field.uuid(),
     mangaId: field.string({ required: true }),
     chapterId: field.string({ required: true }),
     page: field.number({ default: () => 0 }),
     readAt: field.number({ default: () => Date.now() }),
   });
+  ReadHistory = new UnifiedModel<ReadHistoryRecord>(idbReadHistory, "read_history");
 
-  Plugin = new Model<PluginRecord>(db, "plugins", {
+  const idbPlugin = new Model<PluginRecord>(db, "plugins", {
     id: field.uuid(),
     name: field.string({ required: true }),
-    key: field.string({ required: true, unique: true }),
+    key: field.string({ required: true }),
     version: field.string({ required: true }),
     url: field.string(),
     code: field.string({ required: true }),
@@ -300,8 +326,9 @@ export async function initDatabase(): Promise<void> {
     installedAt: field.number({ default: () => Date.now() }),
     updatedAt: field.number({ default: () => Date.now() }),
   });
+  Plugin = new UnifiedModel<PluginRecord>(idbPlugin, "plugins");
 
-  Cache = new Model<CacheRecord>(db, "cache", {
+  const idbCache = new Model<CacheRecord>(db, "cache", {
     id: field.uuid(),
     type: field.string({ required: true }),
     key: field.string({ required: true }),
@@ -309,8 +336,9 @@ export async function initDatabase(): Promise<void> {
     expiresAt: field.number({ required: true }),
     createdAt: field.number({ default: () => Date.now() }),
   });
+  Cache = new UnifiedModel<CacheRecord>(idbCache, "cache");
 
-  Update = new Model<UpdateRecord>(db, "updates", {
+  const idbUpdate = new Model<UpdateRecord>(db, "updates", {
     id: field.uuid(),
     mangaId: field.string({ required: true }),
     newChapterCount: field.number({ default: () => 0 }),
@@ -318,6 +346,7 @@ export async function initDatabase(): Promise<void> {
     checkedAt: field.number({ default: () => Date.now() }),
     isRead: field.boolean({ default: () => false }),
   });
+  Update = new UnifiedModel<UpdateRecord>(idbUpdate, "updates");
 
   // 初始化默认分类
   await initDefaultCategories();

@@ -11,18 +11,18 @@ import type {
   StorageValue,
   StorageQueryOptions,
   StorageStats,
-} from './types';
-import { defaultEncryption } from './types';
+} from "./types";
+import { defaultEncryption } from "./types";
 
 export class LocalStorage implements IStorage {
-  readonly type: StorageType = 'localStorage';
+  readonly type: StorageType = "localStorage";
   readonly name: string;
-  
+
   private config: Required<StorageConfig>;
   private prefix: string;
   private initialized = false;
 
-  constructor(name: string = 'app-storage', config: StorageConfig = {}) {
+  constructor(name: string = "app-storage", config: StorageConfig = {}) {
     this.name = name;
     this.prefix = `${name}:`;
     this.config = {
@@ -45,7 +45,7 @@ export class LocalStorage implements IStorage {
     // 检查 localStorage 是否可用
     try {
       const testKey = `${this.prefix}__test__`;
-      localStorage.setItem(testKey, 'test');
+      localStorage.setItem(testKey, "test");
       localStorage.removeItem(testKey);
       this.initialized = true;
     } catch (error) {
@@ -65,7 +65,7 @@ export class LocalStorage implements IStorage {
    */
   private ensureInitialized(): void {
     if (!this.initialized) {
-      throw new Error('Storage not initialized. Call init() first.');
+      throw new Error("Storage not initialized. Call init() first.");
     }
   }
 
@@ -117,13 +117,18 @@ export class LocalStorage implements IStorage {
   /**
    * 获取值
    */
-  async get<T extends StorageValue = StorageValue>(key: string): Promise<StorageEntry<T> | null> {
+  async get<T extends StorageValue = StorageValue>(
+    key: string,
+  ): Promise<StorageEntry<T> | null> {
     this.ensureInitialized();
 
     try {
       const fullKey = this.getFullKey(key);
-      const data = localStorage.getItem(fullKey);
-      
+      // Tauri 环境下 localStorage.getItem 可能返回 Promise
+      const dataOrPromise: any = localStorage.getItem(fullKey);
+      const data =
+        dataOrPromise instanceof Promise ? await dataOrPromise : dataOrPromise;
+
       if (data === null) {
         return null;
       }
@@ -149,7 +154,7 @@ export class LocalStorage implements IStorage {
     key: string,
     value: T,
     ttl?: number,
-    metadata?: Record<string, unknown>
+    metadata?: Record<string, unknown>,
   ): Promise<void> {
     this.ensureInitialized();
 
@@ -164,13 +169,17 @@ export class LocalStorage implements IStorage {
 
       const fullKey = this.getFullKey(key);
       const serialized = this.serialize(entry);
-      
+
       // 检查大小限制（localStorage 通常限制 5-10MB）
+      // Tauri 环境下 localStorage.setItem 可能返回 Promise
       try {
-        localStorage.setItem(fullKey, serialized);
+        const result: any = localStorage.setItem(fullKey, serialized);
+        if (result instanceof Promise) {
+          await result;
+        }
       } catch (e) {
-        if ((e as Error).name === 'QuotaExceededError') {
-          throw new Error('Storage quota exceeded. Try clearing some data.');
+        if ((e as Error).name === "QuotaExceededError") {
+          throw new Error("Storage quota exceeded. Try clearing some data.");
         }
         throw e;
       }
@@ -188,12 +197,12 @@ export class LocalStorage implements IStorage {
     try {
       const fullKey = this.getFullKey(key);
       const exists = localStorage.getItem(fullKey) !== null;
-      
+
       if (exists) {
         localStorage.removeItem(fullKey);
         return true;
       }
-      
+
       return false;
     } catch (error) {
       throw new Error(`Failed to delete entry: ${error}`);
@@ -240,7 +249,9 @@ export class LocalStorage implements IStorage {
   /**
    * 获取所有条目
    */
-  async getAll<T extends StorageValue = StorageValue>(options: StorageQueryOptions = {}): Promise<StorageEntry<T>[]> {
+  async getAll<T extends StorageValue = StorageValue>(
+    options: StorageQueryOptions = {},
+  ): Promise<StorageEntry<T>[]> {
     const keys = await this.keys();
     const entries: StorageEntry<T>[] = [];
 
@@ -272,7 +283,7 @@ export class LocalStorage implements IStorage {
 
     try {
       const keysToRemove: string[] = [];
-      
+
       for (let i = 0; i < localStorage.length; i++) {
         const fullKey = localStorage.key(i);
         if (fullKey && fullKey.startsWith(this.prefix)) {
@@ -298,7 +309,7 @@ export class LocalStorage implements IStorage {
 
     try {
       const keysToCheck: string[] = [];
-      
+
       for (let i = 0; i < localStorage.length; i++) {
         const fullKey = localStorage.key(i);
         if (fullKey && fullKey.startsWith(this.prefix)) {
@@ -365,9 +376,11 @@ export class LocalStorage implements IStorage {
     try {
       const entries = this.config.serializer.parse(data) as StorageEntry[];
       for (const entry of entries) {
-        await this.set(entry.key, entry.value,
+        await this.set(
+          entry.key,
+          entry.value,
           entry.expiresAt ? entry.expiresAt - Date.now() : undefined,
-          entry.metadata
+          entry.metadata,
         );
       }
     } catch (error) {

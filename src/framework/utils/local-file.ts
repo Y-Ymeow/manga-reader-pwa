@@ -21,9 +21,12 @@ export async function resolveLocalFileUrl(
     return resolver.resolve(info);
   }
 
+  // 尝试多种可能的全局暴露方式
   const globalResolver =
     (window as any)?.resolve_local_file_url ||
-    (window as any)?.tauri.resolve_local_file_url;
+    (window as any)?.__TAURI__?.resolve_local_file_url ||
+    (window as any)?.tauri?.resolve_local_file_url ||
+    (window as any)?.__TAURI_BRIDGE__?.resolve_local_file_url;
 
   if (typeof globalResolver === "function" && info.filePath) {
     try {
@@ -37,7 +40,7 @@ export async function resolveLocalFileUrl(
       )
         return result.url;
     } catch (e) {
-      console.error(e);
+      console.error("[resolveLocalFileUrl] Error:", e);
       return null;
     }
   }

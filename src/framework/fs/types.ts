@@ -3,6 +3,15 @@
  * 文件系统模块的类型定义
  */
 
+/** Tauri Bridge 接口 */
+export interface TauriBridge {
+  _ready: boolean;
+  invoke: (cmd: string, payload: Record<string, unknown>) => Promise<unknown>;
+}
+
+/** 文件系统类型 */
+export type FSType = 'tauri' | 'web-file-picker' | 'unsupported';
+
 /** 文件元数据 */
 export interface FileInfo {
   /** 文件名 */

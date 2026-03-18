@@ -491,11 +491,28 @@ export class Model<T extends ModelData = ModelData> {
    */
   async count(where?: FilterCondition): Promise<number> {
     if (!where) {
-      const store = this.getStore('readonly');
+      // 直接创建事务，保持引用直到请求完成
+      const db = this.db.getDB();
+      const transaction = db.transaction(this.name, 'readonly');
+      const store = transaction.objectStore(this.name);
+
       return new Promise((resolve, reject) => {
-        const request = store.count();
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () => reject(request.error);
+        // 某些浏览器（如旧版 Safari）不支持 count() 方法，使用 getAllKeys 替代
+        if (typeof store.count === 'function') {
+          const request = store.count();
+          request.onsuccess = () => resolve(request.result);
+          request.onerror = () => reject(request.error);
+        } else if (typeof store.getAllKeys === 'function') {
+          // 回退方案 1：使用 getAllKeys 获取所有键然后计数
+          const request = store.getAllKeys();
+          request.onsuccess = () => resolve((request.result as any[]).length);
+          request.onerror = () => reject(request.error);
+        } else {
+          // 回退方案 2：使用 getAll 获取所有记录然后计数
+          const request = store.getAll();
+          request.onsuccess = () => resolve((request.result as any[]).length);
+          request.onerror = () => reject(request.error);
+        }
       });
     }
 

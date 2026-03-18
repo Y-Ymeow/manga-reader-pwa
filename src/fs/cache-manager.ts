@@ -1,10 +1,16 @@
 /**
  * Manga Cache Manager
- * 支持 OPFS、Tauri FS 和 IndexedDB 的多层缓存系统
+ * 支持 OPFS、LocalStorage(Tauri) 和 IndexedDB 的多层缓存系统
  * 用于存储大文件（漫画图片），避免 IndexedDB 大小限制
+ *
+ * 存储优先级：
+ * 1. OPFS（浏览器/移动端推荐）
+ * 2. LocalStorage（Tauri 环境，指向数据库）
+ * 3. IndexedDB（浏览器回退）
  */
 
-import { FS } from '../framework/fs';
+import { isTauri } from './storage-adapter';
+import type { LocalStorage } from '../framework/storages/local';
 
 export interface CacheEntry {
   key: string;
@@ -17,18 +23,18 @@ export interface CacheEntry {
 export interface CacheStats {
   totalSize: number;
   fileCount: number;
-  storageType: 'opfs' | 'fs' | 'indexeddb';
+  storageType: 'opfs' | 'indexeddb' | 'local';
 }
 
 /**
  * 漫画缓存管理器
- * 优先使用 OPFS，其次 Tauri FS，最后 IndexedDB
+ * 优先使用 OPFS，然后 LocalStorage(Tauri)，最后 IndexedDB
  */
 export class MangaCacheManager {
   private opfsRoot: FileSystemDirectoryHandle | null = null;
-  private fs: FS | null = null;
   private db: IDBDatabase | null = null;
-  private storageType: 'opfs' | 'fs' | 'indexeddb' | null = null;
+  private localStorage: LocalStorage | null = null;
+  private storageType: 'opfs' | 'indexeddb' | 'local' | null = null;
   private isInitialized = false;
   private baseDir = 'manga-cache';
 
@@ -38,7 +44,7 @@ export class MangaCacheManager {
   async init(): Promise<boolean> {
     if (this.isInitialized) return true;
 
-    // 1. 尝试使用 OPFS
+    // 1. 尝试使用 OPFS（推荐，包括移动端）
     try {
       if ('storage' in navigator && 'getDirectory' in navigator.storage) {
         this.opfsRoot = await navigator.storage.getDirectory();
@@ -46,26 +52,24 @@ export class MangaCacheManager {
         await this.opfsRoot.getDirectoryHandle(this.baseDir, { create: true });
         this.storageType = 'opfs';
         this.isInitialized = true;
-        console.log('[MangaCache] Using OPFS storage');
         return true;
       }
     } catch (e) {
       console.warn('[MangaCache] OPFS not available:', e);
     }
 
-    // 2. 尝试使用 Tauri FS
-    try {
-      const fs = new FS({ baseDir: this.baseDir });
-      if (fs.isReady()) {
-        this.fs = fs;
-        await fs.ensureDir('/');
-        this.storageType = 'fs';
+    // 2. Tauri 环境下使用 LocalStorage（指向数据库）
+    if (isTauri()) {
+      try {
+        const { LocalStorage } = await import('../framework/storages/local');
+        this.localStorage = new LocalStorage('manga-cache');
+        await this.localStorage.init();
+        this.storageType = 'local';
         this.isInitialized = true;
-        console.log('[MangaCache] Using Tauri FS storage');
         return true;
+      } catch (e) {
+        console.warn('[MangaCache] LocalStorage (Tauri) not available:', e);
       }
-    } catch (e) {
-      console.warn('[MangaCache] Tauri FS not available:', e);
     }
 
     // 3. 回退到 IndexedDB
@@ -73,7 +77,6 @@ export class MangaCacheManager {
       this.db = await this.initIndexedDB();
       this.storageType = 'indexeddb';
       this.isInitialized = true;
-      console.log('[MangaCache] Using IndexedDB storage (fallback)');
       return true;
     } catch (e) {
       console.error('[MangaCache] All storage methods failed:', e);
@@ -134,8 +137,8 @@ export class MangaCacheManager {
       switch (this.storageType) {
         case 'opfs':
           return await this.writeOPFS(path, data, contentType);
-        case 'fs':
-          return await this.writeFS(path, data);
+        case 'local':
+          return await this.writeLocalStorage(path, data, contentType);
         case 'indexeddb':
           return await this.writeIndexedDB(path, data, contentType);
         default:
@@ -183,10 +186,15 @@ export class MangaCacheManager {
   }
 
   /**
-   * 使用 Tauri FS 写入
+   * 使用 LocalStorage 写入（Tauri 环境，指向数据库）
+   * 使用压缩存储大文件
    */
-  private async writeFS(path: string, data: Uint8Array | Blob): Promise<boolean> {
-    if (!this.fs) return false;
+  private async writeLocalStorage(
+    path: string,
+    data: Uint8Array | Blob,
+    contentType: string
+  ): Promise<boolean> {
+    if (!this.localStorage) return false;
 
     try {
       let uint8Data: Uint8Array;
@@ -197,10 +205,19 @@ export class MangaCacheManager {
         uint8Data = data;
       }
 
-      await this.fs.writeFile(`/${path}`, uint8Data, { createDirs: true });
+      // 将 Uint8Array 转换为 Base64 存储
+      const base64 = this.uint8ArrayToBase64(uint8Data);
+      
+      const key = `file:${path}`;
+      await this.localStorage.set(key, {
+        data: base64,
+        contentType,
+        createdAt: Date.now(),
+      });
+
       return true;
     } catch (e) {
-      console.error('[MangaCache] FS write failed:', e);
+      console.error('[MangaCache] LocalStorage write failed:', e);
       return false;
     }
   }
@@ -262,8 +279,8 @@ export class MangaCacheManager {
       switch (this.storageType) {
         case 'opfs':
           return await this.readOPFS(path);
-        case 'fs':
-          return await this.readFS(path);
+        case 'local':
+          return await this.readLocalStorage(path);
         case 'indexeddb':
           return await this.readIndexedDB(path);
         default:
@@ -304,18 +321,29 @@ export class MangaCacheManager {
   }
 
   /**
-   * 使用 Tauri FS 读取
+   * 使用 LocalStorage 读取（Tauri 环境）
    */
-  private async readFS(path: string): Promise<{ data: Uint8Array; contentType: string } | null> {
-    if (!this.fs) return null;
+  private async readLocalStorage(
+    path: string
+  ): Promise<{ data: Uint8Array; contentType: string } | null> {
+    if (!this.localStorage) return null;
 
     try {
-      const data = await this.fs.readBinaryFile(`/${path}`);
+      const key = `file:${path}`;
+      const entry = await this.localStorage.get<{ data: string; contentType: string }>(key);
+      
+      if (!entry?.value?.data) return null;
+
+      // 将 Base64 转换回 Uint8Array
+      const base64 = entry.value.data;
+      const uint8Data = this.base64ToUint8Array(base64);
+
       return {
-        data,
-        contentType: 'image/webp',
+        data: uint8Data,
+        contentType: entry.value.contentType || 'image/webp',
       };
     } catch (e) {
+      console.error('[MangaCache] LocalStorage read failed:', e);
       return null;
     }
   }
@@ -372,8 +400,8 @@ export class MangaCacheManager {
       switch (this.storageType) {
         case 'opfs':
           return await this.getCachedChaptersOPFS(mangaDir);
-        case 'fs':
-          return await this.getCachedChaptersFS(mangaDir);
+        case 'local':
+          return await this.getCachedChaptersLocalStorage(mangaDir);
         case 'indexeddb':
           return await this.getCachedChaptersIndexedDB(mangaDir);
         default:
@@ -420,11 +448,30 @@ export class MangaCacheManager {
   }
 
   /**
-   * 使用 Tauri FS 获取已缓存章节
+   * 使用 LocalStorage 获取已缓存章节
    */
-  private async getCachedChaptersFS(mangaDir: string): Promise<string[]> {
-    // Tauri FS 暂不支持目录遍历，返回空数组
-    return [];
+  private async getCachedChaptersLocalStorage(mangaDir: string): Promise<string[]> {
+    if (!this.localStorage) return [];
+
+    const cachedChapters = new Set<string>();
+    try {
+      const keys = await this.localStorage.keys();
+      const prefix = `file:${mangaDir}/`;
+      
+      for (const key of keys) {
+        if (key.startsWith(prefix)) {
+          const path = key.replace('file:', '');
+          const parts = path.split('/');
+          if (parts.length >= 2) {
+            cachedChapters.add(parts[1]); // 章节 ID 是第二部分
+          }
+        }
+      }
+    } catch (e) {
+      console.error('[MangaCache] LocalStorage get cached chapters failed:', e);
+    }
+
+    return Array.from(cachedChapters);
   }
 
   /**
@@ -471,8 +518,8 @@ export class MangaCacheManager {
       switch (this.storageType) {
         case 'opfs':
           return await this.deleteOPFS(mangaDir, chapterId);
-        case 'fs':
-          return await this.deleteFS(mangaDir, chapterId);
+        case 'local':
+          return await this.deleteLocalStorage(mangaDir, chapterId);
         case 'indexeddb':
           return await this.deleteIndexedDB(mangaDir, chapterId);
         default:
@@ -508,13 +555,23 @@ export class MangaCacheManager {
     }
   }
 
-  private async deleteFS(mangaDir: string, chapterId?: string): Promise<boolean> {
-    if (!this.fs) return false;
+  /**
+   * 使用 LocalStorage 删除（Tauri 环境）
+   */
+  private async deleteLocalStorage(mangaDir: string, chapterId?: string): Promise<boolean> {
+    if (!this.localStorage) return false;
     try {
-      const path = chapterId ? `/${mangaDir}/${chapterId}` : `/${mangaDir}`;
-      await this.fs.removeDir(path, true);
+      const keys = await this.localStorage.keys();
+      const prefix = chapterId ? `file:${mangaDir}/${chapterId}` : `file:${mangaDir}`;
+
+      for (const key of keys) {
+        if (key.startsWith(prefix)) {
+          await this.localStorage.delete(key);
+        }
+      }
       return true;
     } catch (e) {
+      console.error('[MangaCache] LocalStorage delete failed:', e);
       return false;
     }
   }
@@ -565,8 +622,8 @@ export class MangaCacheManager {
         case 'opfs':
           ({ totalSize, fileCount } = await this.getOPFSStats());
           break;
-        case 'fs':
-          ({ totalSize, fileCount } = await this.getFSStats());
+        case 'local':
+          ({ totalSize, fileCount } = await this.getLocalStorageStats());
           break;
         case 'indexeddb':
           ({ totalSize, fileCount } = await this.getIndexedDBStats());
@@ -612,9 +669,29 @@ export class MangaCacheManager {
     return { totalSize, fileCount };
   }
 
-  private async getFSStats(): Promise<{ totalSize: number; fileCount: number }> {
-    // Tauri FS 不支持快速统计，返回 0
-    return { totalSize: 0, fileCount: 0 };
+  /**
+   * 使用 LocalStorage 统计
+   */
+  private async getLocalStorageStats(): Promise<{ totalSize: number; fileCount: number }> {
+    let totalSize = 0;
+    let fileCount = 0;
+
+    if (!this.localStorage) return { totalSize, fileCount };
+
+    try {
+      const entries = await this.localStorage.getAll<{ data: string; contentType: string }>();
+      for (const entry of entries) {
+        if (entry.value?.data) {
+          // Base64 字符串长度估算大小
+          totalSize += entry.value.data.length;
+          fileCount++;
+        }
+      }
+    } catch (e) {
+      // 忽略错误
+    }
+
+    return { totalSize, fileCount };
   }
 
   private async getIndexedDBStats(): Promise<{ totalSize: number; fileCount: number }> {
@@ -730,6 +807,30 @@ export class MangaCacheManager {
     }
 
     return deletedCount;
+  }
+
+  /**
+   * Uint8Array 转 Base64
+   */
+  private uint8ArrayToBase64(data: Uint8Array): string {
+    let binary = '';
+    for (let i = 0; i < data.byteLength; i++) {
+      binary += String.fromCharCode(data[i]);
+    }
+    return btoa(binary);
+  }
+
+  /**
+   * Base64 转 Uint8Array
+   */
+  private base64ToUint8Array(base64: string): Uint8Array {
+    const binary = atob(base64);
+    const len = binary.length;
+    const bytes = new Uint8Array(len);
+    for (let i = 0; i < len; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    return bytes;
   }
 }
 

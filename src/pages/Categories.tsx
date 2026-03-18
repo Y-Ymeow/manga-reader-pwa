@@ -2,7 +2,7 @@ import { useState, useEffect } from "preact/hooks";
 import { Button } from "@components/ui/Button";
 import { MangaCard } from "@components/manga/MangaCard";
 import { MangaGrid } from "@components/manga/MangaGrid";
-import { navigate } from "@routes/index";
+import { navigate, useRoute } from "@routes/index";
 import {
   initPluginSystem,
   getPlugins,
@@ -13,8 +13,10 @@ import {
   type Comic,
 } from "@plugins/index";
 import { initDatabase } from "@db/index";
+import { pageStateActions } from "@state/page-state";
 
 export function Categories() {
+  const { params } = useRoute();
   const [plugins, setPlugins] = useState<PluginInstance[]>([]);
   const [selectedPlugin, setSelectedPlugin] = useState<PluginInstance | null>(
     null,
@@ -32,21 +34,78 @@ export function Categories() {
   const [error, setError] = useState("");
   const [categoryOptions, setCategoryOptions] = useState<string[]>([]);
   const [optionList, setOptionList] = useState<any[]>([]);
+  const [restore, setRestore] = useState(false);
 
+  // 在状态变化时自动保存到全局状态
+  useEffect(() => {
+    if (!selectedPlugin) return;
+
+    const timer = setTimeout(() => {
+      pageStateActions.setPageState("categories", {
+        selectedPluginKey: selectedPlugin.key,
+        pluginName: selectedPlugin.name,
+        categoryData,
+        selectedCategory,
+        comics,
+        maxPage,
+        currentPage,
+        categoryOptions,
+        optionList,
+      });
+    }, 500);
+
+    return () => clearTimeout(timer);
+  }, [
+    categoryData,
+    selectedCategory,
+    comics,
+    maxPage,
+    currentPage,
+    categoryOptions,
+    optionList,
+    selectedPlugin,
+  ]);
+
+  // 初始化插件系统
   useEffect(() => {
     const init = async () => {
+      setRestore(true);
       try {
         await initDatabase();
         await initPluginSystem();
         await restorePluginsFromStorage();
         const loadedPlugins = getPlugins();
         setPlugins(loadedPlugins);
+
+        // 如果是从历史记录返回，恢复状态
+        if (params?.restore === "true" && params?.pluginKey) {
+          setRestore(true);
+          const savedState = pageStateActions.getPageState("categories");
+          if (
+            savedState.selectedPluginKey === params.pluginKey &&
+            savedState.categoryData !== null
+          ) {
+            const plugin = loadedPlugins.find(
+              (p) => p.key === params.pluginKey,
+            );
+            if (plugin) {
+              setSelectedPlugin(plugin);
+              setCategoryData(savedState.categoryData);
+              setSelectedCategory(savedState.selectedCategory);
+              setComics(savedState.comics);
+              setMaxPage(savedState.maxPage);
+              setCurrentPage(savedState.currentPage);
+              setCategoryOptions(savedState.categoryOptions);
+              setOptionList(savedState.optionList);
+            }
+          }
+        }
       } catch (e) {
         console.error("Failed to initialize:", e);
       }
     };
     init();
-  }, []);
+  }, [params?.restore, params?.pluginKey]);
 
   // 加载分类数据（只在有分类的插件中显示）
   useEffect(() => {
@@ -62,8 +121,11 @@ export function Categories() {
         // 检查是否有有效的分类数据
         if (catData && catData.parts && catData.parts.length > 0) {
           setCategoryData(catData);
-          setSelectedCategory(null);
-          setComics([]);
+          if (!restore) {
+            setSelectedCategory(null);
+            setComics([]);
+          }
+          setRestore(false);
         } else {
           // 没有分类，显示提示
           setCategoryData(null);
@@ -82,16 +144,39 @@ export function Categories() {
     categoryTarget?: any,
   ) => {
     if (!selectedPlugin?.categoryComics) return;
-    
+
     // 如果是 target 格式，从 target 中获取信息
     if (categoryTarget) {
       const target = categoryTarget.target;
-      if (target?.page === 'category') {
+      if (target?.page === "category") {
         categoryName = target.attributes?.category || categoryName;
         categoryParam = target.attributes?.param || categoryParam;
       }
+      // 如果 target 直接包含 load 方法，直接调用
+      if (typeof target?.load === "function") {
+        setLoading(true);
+        setError("");
+        setCurrentPage(1);
+        try {
+          const result = await target.load(1);
+          setComics(result.comics || []);
+          setMaxPage(result.maxPage || 1);
+          setHasMore(
+            result.maxPage
+              ? 1 < result.maxPage
+              : (result.comics?.length || 0) > 0,
+          );
+          setSelectedCategory({ name: categoryName, param: categoryParam });
+          return;
+        } catch (e: any) {
+          console.error("Failed to load category via target:", e);
+          setError(e.message || "加载失败");
+          setLoading(false);
+          return;
+        }
+      }
     }
-    
+
     setSelectedCategory({ name: categoryName, param: categoryParam });
     setLoading(true);
     setError("");
@@ -194,6 +279,19 @@ export function Categories() {
   };
 
   const handleMangaClick = (comic: Comic) => {
+    // 添加历史记录
+    pageStateActions.pushHistory("categories", {
+      selectedPluginKey: selectedPlugin?.key || "",
+      pluginName: selectedPlugin?.name,
+      comics,
+      maxPage,
+      currentPage,
+      categoryData,
+      selectedCategory,
+      categoryOptions,
+      optionList,
+    });
+
     navigate("manga", { id: `${selectedPlugin?.key}:${comic.id}` });
   };
 
@@ -229,19 +327,44 @@ export function Categories() {
           {/* 插件选择 */}
           <div class="flex gap-2 mt-3 overflow-x-auto scrollbar-hide">
             {pluginsWithCategory.length > 0 ? (
-              pluginsWithCategory.map((plugin) => (
-                <button
-                  key={plugin.key}
-                  onClick={() => setSelectedPlugin(plugin)}
-                  class={`flex-shrink-0 px-4 py-2 rounded-lg text-sm transition-colors ${
-                    selectedPlugin?.key === plugin.key
-                      ? "bg-[#e94560] text-white"
-                      : "bg-[#16213e] text-gray-300 hover:bg-[#1e2a4a]"
-                  }`}
-                >
-                  {plugin.name}
-                </button>
-              ))
+              pluginsWithCategory.map((plugin) => {
+                const pluginKey = plugin.key;
+                const savedState = pageStateActions.getPageState("categories");
+                const hasState =
+                  savedState.selectedPluginKey === pluginKey &&
+                  savedState.categoryData !== null;
+
+                return (
+                  <button
+                    key={plugin.key}
+                    onClick={() => {
+                      if (hasState) {
+                        // 从全局状态恢复
+                        setCategoryData(savedState.categoryData);
+                        setSelectedCategory(savedState.selectedCategory);
+                        setComics(savedState.comics);
+                        setMaxPage(savedState.maxPage);
+                        setCurrentPage(savedState.currentPage);
+                        setCategoryOptions(savedState.categoryOptions);
+                        setOptionList(savedState.optionList);
+                      } else {
+                        // 没有保存的状态，清空
+                        setCategoryData(null);
+                        setSelectedCategory(null);
+                        setComics([]);
+                      }
+                      setSelectedPlugin(plugin);
+                    }}
+                    class={`flex-shrink-0 px-4 py-2 rounded-lg text-sm transition-colors ${
+                      selectedPlugin?.key === plugin.key
+                        ? "bg-[#e94560] text-white"
+                        : "bg-[#16213e] text-gray-300 hover:bg-[#1e2a4a]"
+                    }`}
+                  >
+                    {plugin.name}
+                  </button>
+                );
+              })
             ) : (
               <p class="text-gray-400 text-sm py-2">暂无支持分类的插件</p>
             )}
@@ -267,17 +390,39 @@ export function Categories() {
               <div class="flex flex-wrap gap-2">
                 {part.categories?.map((category: any, catIndex: number) => {
                   // 支持两种格式：字符串 或 {label, target} 对象
-                  const label = typeof category === 'string' ? category : category.label;
-                  const target = typeof category === 'object' ? category : undefined;
+                  const label =
+                    typeof category === "string" ? category : category.label;
+                  const target =
+                    typeof category === "object" ? category : undefined;
                   const param = part.categoryParams?.[catIndex];
-                  
+                  const isSelected =
+                    selectedCategory &&
+                    (selectedCategory as any).name === label &&
+                    (selectedCategory as any).param === param;
+
                   return (
                     <button
                       key={catIndex}
-                      onClick={() => handleSelectCategory(label, param, target)}
-                      class="px-3 py-2 bg-[#16213e] hover:bg-[#1a4a7a] text-white text-sm rounded-lg transition-colors"
+                      onClick={() =>
+                        !loading && handleSelectCategory(label, param, target)
+                      }
+                      disabled={loading}
+                      class={`px-3 py-2 text-sm rounded-lg transition-all ${
+                        isSelected
+                          ? "bg-[#e94560] text-white"
+                          : loading
+                            ? "bg-[#16213e] text-gray-500 cursor-not-allowed"
+                            : "bg-[#16213e] hover:bg-[#1a4a7a] text-white"
+                      }`}
                     >
-                      {label}
+                      {loading && isSelected ? (
+                        <span class="flex items-center gap-1">
+                          <span class="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin" />
+                          加载中...
+                        </span>
+                      ) : (
+                        label
+                      )}
                     </button>
                   );
                 })}
@@ -318,11 +463,12 @@ export function Categories() {
                             <button
                               key={value}
                               onClick={() => handleOptionChange(idx, value)}
+                              disabled={loading}
                               class={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
                                 isChecked
                                   ? "bg-[#e94560] text-white"
                                   : "bg-[#16213e] text-gray-300 hover:bg-[#1e2a4a]"
-                              }`}
+                              } ${loading ? "opacity-50 cursor-not-allowed" : ""}`}
                             >
                               {label || value}
                             </button>
@@ -332,9 +478,27 @@ export function Categories() {
                     </div>
                   ))}
                 </div>
-                <Button onClick={handleApplyOptions} size="sm">
-                  应用筛选
-                </Button>
+                <div class="flex items-center gap-2">
+                  <Button
+                    onClick={handleApplyOptions}
+                    size="sm"
+                    disabled={loading}
+                  >
+                    {loading ? (
+                      <span class="flex items-center gap-1">
+                        <span class="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin" />
+                        加载中...
+                      </span>
+                    ) : (
+                      "应用筛选"
+                    )}
+                  </Button>
+                  {loading && (
+                    <span class="text-sm text-gray-400">
+                      正在加载漫画，请稍候...
+                    </span>
+                  )}
+                </div>
               </div>
             )}
 

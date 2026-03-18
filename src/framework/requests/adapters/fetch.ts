@@ -8,18 +8,18 @@ import type {
   RequestConfig,
   ResponseData,
   StreamChunk,
-} from '../types';
+} from "../types";
 
-import { RequestError } from '../types';
+import { RequestError } from "../types";
 
 export class FetchAdapter implements IRequestAdapter {
-  readonly name = 'fetch';
+  readonly name = "fetch";
 
   /**
    * 检查是否支持 fetch
    */
   isSupported(): boolean {
-    return typeof fetch !== 'undefined';
+    return typeof fetch !== "undefined";
   }
 
   /**
@@ -40,7 +40,7 @@ export class FetchAdapter implements IRequestAdapter {
     const queryString = searchParams.toString();
     if (!queryString) return url;
 
-    const separator = url.includes('?') ? '&' : '?';
+    const separator = url.includes("?") ? "&" : "?";
     return `${url}${separator}${queryString}`;
   }
 
@@ -60,45 +60,55 @@ export class FetchAdapter implements IRequestAdapter {
    */
   private async parseResponse<T>(
     response: Response,
-    responseType?: string
+    responseType?: string,
   ): Promise<T> {
-    if (!responseType)  {
-      if (response.headers.get('content-type')?.includes('application/json')) {
-        responseType = 'json';
+    if (!responseType) {
+      if (response.headers.get("content-type")?.includes("application/json")) {
+        responseType = "json";
       }
 
-      if (response.headers.get('content-type')?.includes('text/plain')) {
-        responseType = 'text';
+      if (response.headers.get("content-type")?.includes("text/plain")) {
+        responseType = "text";
       }
 
-      if (response.headers.get('content-type')?.includes('text/html')) {
-        responseType = 'text';
+      if (response.headers.get("content-type")?.includes("text/html")) {
+        responseType = "text";
       }
 
-      if (response.headers.get('content-type')?.includes('image/')) {
-        responseType = 'blob';
+      if (response.headers.get("content-type")?.includes("image/")) {
+        responseType = "blob";
       }
 
-      if (response.headers.get('content-type')?.includes('application/octet-stream')) {
-        responseType = 'arraybuffer';
+      if (
+        response.headers
+          .get("content-type")
+          ?.includes("application/octet-stream")
+      ) {
+        responseType = "arraybuffer";
       }
 
-      if (response.headers.get('content-type')?.includes('application/x-www-form-urlencoded')) {
-        responseType = 'form';
+      if (
+        response.headers
+          .get("content-type")
+          ?.includes("application/x-www-form-urlencoded")
+      ) {
+        responseType = "form";
       }
 
-      if (response.headers.get('content-type')?.includes('multipart/form-data')) {
-        responseType = 'form';
+      if (
+        response.headers.get("content-type")?.includes("multipart/form-data")
+      ) {
+        responseType = "form";
       }
     }
 
-    if (responseType === 'text') {
+    if (responseType === "text") {
       return response.text() as Promise<T>;
     }
-    if (responseType === 'blob') {
+    if (responseType === "blob") {
       return response.blob() as Promise<T>;
     }
-    if (responseType === 'arraybuffer') {
+    if (responseType === "arraybuffer") {
       return response.arrayBuffer() as Promise<T>;
     }
     // 默认 JSON
@@ -110,7 +120,7 @@ export class FetchAdapter implements IRequestAdapter {
    */
   async request<T = unknown>(config: RequestConfig): Promise<ResponseData<T>> {
     if (!this.isSupported()) {
-      throw new RequestError('Fetch API is not supported in this environment', {
+      throw new RequestError("Fetch API is not supported in this environment", {
         isNetworkError: true,
         config,
       });
@@ -125,19 +135,19 @@ export class FetchAdapter implements IRequestAdapter {
 
     // 合并信号
     if (config.signal) {
-      config.signal.addEventListener('abort', () => controller.abort());
+      config.signal.addEventListener("abort", () => controller.abort());
     }
 
     try {
       const response = await fetch(url, {
-        method: config.method || 'GET',
+        method: config.method || "GET",
         headers: config.headers,
         body: config.body ? JSON.stringify(config.body) : undefined,
-        credentials: config.withCredentials ? 'include' : 'same-origin',
+        credentials: config.withCredentials ? "include" : "same-origin",
         signal: controller.signal,
       });
 
-      clearTimeout(timeoutId); 
+      clearTimeout(timeoutId);
 
       if (!response.ok) {
         let errorData: unknown;
@@ -153,12 +163,11 @@ export class FetchAdapter implements IRequestAdapter {
             status: response.status,
             response: errorData,
             config,
-          }
+          },
         );
       }
 
       const data = await this.parseResponse<T>(response, config.responseType);
-      console.log(data);
 
       return {
         data,
@@ -176,8 +185,8 @@ export class FetchAdapter implements IRequestAdapter {
       }
 
       if (error instanceof Error) {
-        if (error.name === 'AbortError') {
-          throw new RequestError('Request timeout', {
+        if (error.name === "AbortError") {
+          throw new RequestError("Request timeout", {
             isTimeout: true,
             config,
           });
@@ -188,7 +197,7 @@ export class FetchAdapter implements IRequestAdapter {
         });
       }
 
-      throw new RequestError('Unknown error', { config });
+      throw new RequestError("Unknown error", { config });
     }
   }
 
@@ -197,7 +206,7 @@ export class FetchAdapter implements IRequestAdapter {
    */
   async *stream(config: RequestConfig): AsyncIterableIterator<StreamChunk> {
     if (!this.isSupported()) {
-      throw new RequestError('Fetch API is not supported in this environment', {
+      throw new RequestError("Fetch API is not supported in this environment", {
         isNetworkError: true,
         config,
       });
@@ -209,18 +218,18 @@ export class FetchAdapter implements IRequestAdapter {
     const timeoutId = setTimeout(() => controller.abort(), timeout);
 
     if (config.signal) {
-      config.signal.addEventListener('abort', () => controller.abort());
+      config.signal.addEventListener("abort", () => controller.abort());
     }
 
     try {
       const response = await fetch(url, {
-        method: config.method || 'POST',
+        method: config.method || "POST",
         headers: {
-          'Accept': 'text/event-stream',
+          Accept: "text/event-stream",
           ...config.headers,
         },
         body: config.body ? JSON.stringify(config.body) : undefined,
-        credentials: config.withCredentials ? 'include' : 'same-origin',
+        credentials: config.withCredentials ? "include" : "same-origin",
         signal: controller.signal,
       });
 
@@ -232,12 +241,12 @@ export class FetchAdapter implements IRequestAdapter {
           {
             status: response.status,
             config,
-          }
+          },
         );
       }
 
       if (!response.body) {
-        throw new RequestError('No response body', { config });
+        throw new RequestError("No response body", { config });
       }
 
       const reader = response.body.getReader();
@@ -246,9 +255,9 @@ export class FetchAdapter implements IRequestAdapter {
       try {
         while (true) {
           const { done, value } = await reader.read();
-          
+
           if (done) {
-            yield { data: '', done: true };
+            yield { data: "", done: true };
             return;
           }
 
@@ -266,8 +275,8 @@ export class FetchAdapter implements IRequestAdapter {
       }
 
       if (error instanceof Error) {
-        if (error.name === 'AbortError') {
-          throw new RequestError('Request timeout', {
+        if (error.name === "AbortError") {
+          throw new RequestError("Request timeout", {
             isTimeout: true,
             config,
           });
@@ -278,7 +287,7 @@ export class FetchAdapter implements IRequestAdapter {
         });
       }
 
-      throw new RequestError('Unknown error', { config });
+      throw new RequestError("Unknown error", { config });
     }
   }
 }

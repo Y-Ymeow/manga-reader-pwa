@@ -38,6 +38,14 @@ export {
   initDatabase,
   defineModel,
 
+  // SQLite
+  initSQLiteStorage,
+  getSQLiteStorage,
+  initSQLiteDB,
+  getSQLiteDBManager,
+  defineSQLiteModelClass,
+  createSQLiteModel,
+
   // Schema 快捷定义
   field,
   f,
@@ -126,6 +134,22 @@ export type {
 } from "./indexeddb";
 
 export type {
+  // SQLite 类型
+  SQLiteBridge,
+  SQLiteStorageConfig,
+  SQLiteModelConfig,
+  SQLiteModelData,
+  SQLiteModelQueryOptions,
+  SQLiteDatabaseConfig,
+  EAVRecord,
+  SQLiteFilterCondition,
+  SQLiteSortDirection,
+  SQLiteSortOptions,
+  SQLiteBatchResult,
+  SQLiteChangeLog,
+} from "./sqlite";
+
+export type {
   // Memory 类型
   MemoryConfig,
   MemoryEntry,
@@ -204,4 +228,19 @@ export {
   createFS,
   getFS,
   setFS,
+} from "./helper";
+
+// SQLite 模块快捷函数
+export {
+  SQLiteStorage,
+  SQLiteModel,
+  SQLiteDatabaseManager,
+  SQLiteQueryBuilder,
+  createSQLiteStorage,
+  createSQLiteModelInstance,
+  createSQLiteDB,
+  getGlobalSQLiteStorage,
+  getSQLiteDB,
+  setSQLiteBridge,
+  getSQLiteBridge,
 } from "./helper";

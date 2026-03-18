@@ -12,6 +12,10 @@ import { MangaDetail } from "@pages/MangaDetail";
 import { Reader } from "@pages/Reader";
 import { CacheManager } from "@pages/CacheManager";
 import { BottomNav } from "@components/layout/BottomNav";
+import {
+  appStateActions,
+  appStateActions as pageStateActions,
+} from "@state/page-state";
 
 type Route =
   | "home"
@@ -31,6 +35,8 @@ interface RouteState {
   route: Route;
   params?: Record<string, string>;
 }
+
+const history = [];
 
 // 从 hash 解析路由
 function parseHash(): RouteState {
@@ -55,6 +61,7 @@ let currentRoute: RouteState = parseHash();
 
 const listeners = new Set<(state: RouteState) => void>();
 
+// 导航函数
 export function navigate(route: Route, params?: Record<string, string>) {
   currentRoute = { route, params };
 
@@ -68,8 +75,42 @@ export function navigate(route: Route, params?: Record<string, string>) {
     hash += `?${searchParams.toString()}`;
   }
   location.hash = hash;
+  window.history.pushState(null, "", hash);
 
   listeners.forEach((fn) => fn({ ...currentRoute }));
+}
+
+// 返回上一个页面（使用历史记录）
+export function goBack() {
+  const historyItem = appStateActions.goBack();
+  if (historyItem) {
+    // 根据历史记录导航到对应的页面，并标记需要恢复状态
+    switch (historyItem.pageType) {
+      case "explore":
+        navigate("explore", {
+          restore: "true",
+          pluginKey: historyItem.pluginKey || "",
+        });
+        break;
+      case "categories":
+        navigate("categories", {
+          restore: "true",
+          pluginKey: historyItem.pluginKey || "",
+        });
+        break;
+      case "search":
+        navigate("search", {
+          restore: "true",
+          pluginKey: historyItem.pluginKey || "",
+        });
+        break;
+      default:
+        navigate("home");
+    }
+  } else {
+    // 没有历史记录，返回书架
+    navigate("home");
+  }
 }
 
 export function useRoute(): RouteState {
@@ -107,8 +148,6 @@ export function Router() {
         return <Categories />;
       case "search":
         return <Search />;
-      case "favorites":
-        return <Favorites />;
       case "history":
         return <History />;
       case "settings":
@@ -118,7 +157,7 @@ export function Router() {
       case "plugin-settings":
         return <PluginSettings pluginKey={params?.key} />;
       case "manga":
-        return <MangaDetail mangaId={params?.id} />;
+        return <MangaDetail mangaId={params?.id} onBack={goBack} />;
       case "reader":
         return (
           <Reader

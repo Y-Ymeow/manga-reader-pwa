@@ -1,16 +1,20 @@
 /**
  * 缓存索引系统
- * 使用 IndexedDB 记录缓存的元数据，包括章节、图片URL等信息
+ * 记录缓存的元数据，包括章节、图片 URL 等信息
  * 避免每次都去扫描文件系统
+ *
+ * 支持双模式：
+ * - Tauri 模式：使用 LocalStorage（指向数据库）
+ * - 浏览器模式：使用 IndexedDB
  */
 
-
+import { createStorageAdapter, type IStorageAdapter } from "./storage-adapter";
 
 export interface ChapterCacheInfo {
   chapterId: string;
   chapterTitle: string;
   imageCount: number;
-  imageUrls: string[];  // 原始图片URL
+  imageUrls: string[]; // 原始图片 URL
   cachedAt: number;
   lastAccessedAt: number;
 }
@@ -25,38 +29,30 @@ export interface MangaCacheInfo {
   updatedAt: number;
 }
 
-const CACHE_INDEX_STORE = 'cache_index';
+const CACHE_INDEX_KEY_PREFIX = "cache_index:";
+const CACHE_INDEX_STORE = "cache_index";
 
 /**
- * 获取缓存索引数据库
+ * 获取缓存索引存储适配器
  */
-async function getCacheIndexDB(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open('MangaCacheIndexDB', 1);
-
-    request.onerror = () => reject(request.error);
-    request.onsuccess = () => resolve(request.result);
-
-    request.onupgradeneeded = (event) => {
-      const db = (event.target as IDBOpenDBRequest).result;
-      if (!db.objectStoreNames.contains(CACHE_INDEX_STORE)) {
-        const store = db.createObjectStore(CACHE_INDEX_STORE, { keyPath: 'mangaId' });
-        store.createIndex('pluginId', 'pluginId', { unique: false });
-        store.createIndex('updatedAt', 'updatedAt', { unique: false });
-      }
-    };
+async function getCacheIndexStorage(): Promise<IStorageAdapter> {
+  const storage = createStorageAdapter("manga-cache-index", {
+    dbName: "MangaCacheIndexDB",
+    storeName: CACHE_INDEX_STORE,
   });
+  await storage.init();
+  return storage;
 }
 
 /**
  * 缓存索引管理器
  */
 class CacheIndexManager {
-  private db: IDBDatabase | null = null;
+  private storage: IStorageAdapter | null = null;
 
   async init(): Promise<void> {
-    if (!this.db) {
-      this.db = await getCacheIndexDB();
+    if (!this.storage) {
+      this.storage = await getCacheIndexStorage();
     }
   }
 
@@ -65,32 +61,25 @@ class CacheIndexManager {
    */
   async getMangaCacheInfo(mangaId: string): Promise<MangaCacheInfo | null> {
     await this.init();
-    if (!this.db) return null;
+    if (!this.storage) return null;
 
     try {
-      const transaction = this.db.transaction([CACHE_INDEX_STORE], 'readonly');
-      const store = transaction.objectStore(CACHE_INDEX_STORE);
-
-      const result = await new Promise<any>((resolve, reject) => {
-        const request = store.get(mangaId);
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () => reject(request.error);
-      });
-
+      const key = `${CACHE_INDEX_KEY_PREFIX}${mangaId}`;
+      const result = await this.storage.get<MangaCacheInfo>(key);
       return result || null;
     } catch (e) {
-      console.error('[CacheIndex] Get manga cache info failed:', e);
+      console.error("[CacheIndex] Get manga cache info failed:", e);
       return null;
     }
   }
 
   /**
-   * 获取漫画的所有已缓存章节ID
+   * 获取漫画的所有已缓存章节 ID
    */
   async getCachedChapterIds(mangaId: string): Promise<string[]> {
     const info = await this.getMangaCacheInfo(mangaId);
     if (!info) return [];
-    return info.chapters.map(ch => ch.chapterId);
+    return info.chapters.map((ch) => ch.chapterId);
   }
 
   /**
@@ -99,16 +88,19 @@ class CacheIndexManager {
   async isChapterCached(mangaId: string, chapterId: string): Promise<boolean> {
     const info = await this.getMangaCacheInfo(mangaId);
     if (!info) return false;
-    return info.chapters.some(ch => ch.chapterId === chapterId);
+    return info.chapters.some((ch) => ch.chapterId === chapterId);
   }
 
   /**
-   * 获取章节的缓存图片URL列表
+   * 获取章节的缓存图片 URL 列表
    */
-  async getChapterImageUrls(mangaId: string, chapterId: string): Promise<string[] | null> {
+  async getChapterImageUrls(
+    mangaId: string,
+    chapterId: string,
+  ): Promise<string[] | null> {
     const info = await this.getMangaCacheInfo(mangaId);
     if (!info) return null;
-    const chapter = info.chapters.find(ch => ch.chapterId === chapterId);
+    const chapter = info.chapters.find((ch) => ch.chapterId === chapterId);
     return chapter?.imageUrls || null;
   }
 
@@ -121,12 +113,14 @@ class CacheIndexManager {
     pluginId: string,
     chapterId: string,
     chapterTitle: string,
-    imageUrls: string[]
+    imageUrls: string[],
   ): Promise<void> {
     await this.init();
-    if (!this.db) return;
+    if (!this.storage) return;
 
     try {
+      const key = `${CACHE_INDEX_KEY_PREFIX}${mangaId}`;
+
       // 获取现有记录
       let info = await this.getMangaCacheInfo(mangaId);
 
@@ -144,15 +138,18 @@ class CacheIndexManager {
       }
 
       // 查找或创建章节记录
-      const existingChapterIndex = info.chapters.findIndex(ch => ch.chapterId === chapterId);
+      const existingChapterIndex = info.chapters.findIndex(
+        (ch) => ch.chapterId === chapterId,
+      );
       const chapterInfo: ChapterCacheInfo = {
         chapterId,
         chapterTitle,
         imageCount: imageUrls.length,
         imageUrls,
-        cachedAt: existingChapterIndex >= 0
-          ? info.chapters[existingChapterIndex].cachedAt
-          : Date.now(),
+        cachedAt:
+          existingChapterIndex >= 0
+            ? info.chapters[existingChapterIndex].cachedAt
+            : Date.now(),
         lastAccessedAt: Date.now(),
       };
 
@@ -165,22 +162,16 @@ class CacheIndexManager {
       }
 
       // 更新总计
-      info.totalImages = info.chapters.reduce((sum, ch) => sum + ch.imageCount, 0);
+      info.totalImages = info.chapters.reduce(
+        (sum, ch) => sum + ch.imageCount,
+        0,
+      );
       info.updatedAt = Date.now();
 
       // 保存
-      const transaction = this.db.transaction([CACHE_INDEX_STORE], 'readwrite');
-      const store = transaction.objectStore(CACHE_INDEX_STORE);
-
-      await new Promise<void>((resolve, reject) => {
-        const request = store.put(info);
-        request.onsuccess = () => resolve();
-        request.onerror = () => reject(request.error);
-      });
-
-      console.log('[CacheIndex] Chapter cache recorded:', mangaId, chapterId, imageUrls.length, 'images');
+      await this.storage.set(key, info);
     } catch (e) {
-      console.error('[CacheIndex] Add chapter cache failed:', e);
+      console.error("[CacheIndex] Add chapter cache failed:", e);
     }
   }
 
@@ -189,41 +180,33 @@ class CacheIndexManager {
    */
   async removeChapterCache(mangaId: string, chapterId: string): Promise<void> {
     await this.init();
-    if (!this.db) return;
+    if (!this.storage) return;
 
     try {
       const info = await this.getMangaCacheInfo(mangaId);
       if (!info) return;
 
       // 移除章节
-      info.chapters = info.chapters.filter(ch => ch.chapterId !== chapterId);
+      info.chapters = info.chapters.filter((ch) => ch.chapterId !== chapterId);
 
       // 更新总计
-      info.totalImages = info.chapters.reduce((sum, ch) => sum + ch.imageCount, 0);
+      info.totalImages = info.chapters.reduce(
+        (sum, ch) => sum + ch.imageCount,
+        0,
+      );
       info.updatedAt = Date.now();
 
-      const transaction = this.db.transaction([CACHE_INDEX_STORE], 'readwrite');
-      const store = transaction.objectStore(CACHE_INDEX_STORE);
+      const key = `${CACHE_INDEX_KEY_PREFIX}${mangaId}`;
 
       if (info.chapters.length === 0) {
         // 如果没有章节了，删除整个记录
-        await new Promise<void>((resolve, reject) => {
-          const request = store.delete(mangaId);
-          request.onsuccess = () => resolve();
-          request.onerror = () => reject(request.error);
-        });
+        await this.storage.delete(key);
       } else {
         // 更新记录
-        await new Promise<void>((resolve, reject) => {
-          const request = store.put(info);
-          request.onsuccess = () => resolve();
-          request.onerror = () => reject(request.error);
-        });
+        await this.storage.set(key, info);
       }
-
-      console.log('[CacheIndex] Chapter cache removed:', mangaId, chapterId);
     } catch (e) {
-      console.error('[CacheIndex] Remove chapter cache failed:', e);
+      console.error("[CacheIndex] Remove chapter cache failed:", e);
     }
   }
 
@@ -232,21 +215,13 @@ class CacheIndexManager {
    */
   async removeMangaCache(mangaId: string): Promise<void> {
     await this.init();
-    if (!this.db) return;
+    if (!this.storage) return;
 
     try {
-      const transaction = this.db.transaction([CACHE_INDEX_STORE], 'readwrite');
-      const store = transaction.objectStore(CACHE_INDEX_STORE);
-
-      await new Promise<void>((resolve, reject) => {
-        const request = store.delete(mangaId);
-        request.onsuccess = () => resolve();
-        request.onerror = () => reject(request.error);
-      });
-
-      console.log('[CacheIndex] Manga cache removed:', mangaId);
+      const key = `${CACHE_INDEX_KEY_PREFIX}${mangaId}`;
+      await this.storage.delete(key);
     } catch (e) {
-      console.error('[CacheIndex] Remove manga cache failed:', e);
+      console.error("[CacheIndex] Remove manga cache failed:", e);
     }
   }
 
@@ -255,21 +230,15 @@ class CacheIndexManager {
    */
   async getAllCachedMangas(): Promise<MangaCacheInfo[]> {
     await this.init();
-    if (!this.db) return [];
+    if (!this.storage) return [];
 
     try {
-      const transaction = this.db.transaction([CACHE_INDEX_STORE], 'readonly');
-      const store = transaction.objectStore(CACHE_INDEX_STORE);
-
-      const results = await new Promise<any[]>((resolve, reject) => {
-        const request = store.getAll();
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () => reject(request.error);
-      });
-
-      return results || [];
+      const results = await this.storage.getAll<MangaCacheInfo>(
+        CACHE_INDEX_KEY_PREFIX,
+      );
+      return results;
     } catch (e) {
-      console.error('[CacheIndex] Get all cached mangas failed:', e);
+      console.error("[CacheIndex] Get all cached mangas failed:", e);
       return [];
     }
   }
@@ -279,27 +248,21 @@ class CacheIndexManager {
    */
   async updateLastAccessed(mangaId: string, chapterId: string): Promise<void> {
     await this.init();
-    if (!this.db) return;
+    if (!this.storage) return;
 
     try {
       const info = await this.getMangaCacheInfo(mangaId);
       if (!info) return;
 
-      const chapter = info.chapters.find(ch => ch.chapterId === chapterId);
+      const chapter = info.chapters.find((ch) => ch.chapterId === chapterId);
       if (chapter) {
         chapter.lastAccessedAt = Date.now();
 
-        const transaction = this.db.transaction([CACHE_INDEX_STORE], 'readwrite');
-        const store = transaction.objectStore(CACHE_INDEX_STORE);
-
-        await new Promise<void>((resolve, reject) => {
-          const request = store.put(info);
-          request.onsuccess = () => resolve();
-          request.onerror = () => reject(request.error);
-        });
+        const key = `${CACHE_INDEX_KEY_PREFIX}${mangaId}`;
+        await this.storage.set(key, info);
       }
     } catch (e) {
-      console.error('[CacheIndex] Update last accessed failed:', e);
+      console.error("[CacheIndex] Update last accessed failed:", e);
     }
   }
 
@@ -308,7 +271,7 @@ class CacheIndexManager {
    */
   async cleanupOldRecords(days: number): Promise<number> {
     await this.init();
-    if (!this.db) return 0;
+    if (!this.storage) return 0;
 
     const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
     let deletedCount = 0;
@@ -319,30 +282,26 @@ class CacheIndexManager {
       for (const manga of allMangas) {
         // 过滤掉长时间未访问的章节
         const originalLength = manga.chapters.length;
-        manga.chapters = manga.chapters.filter(ch => ch.lastAccessedAt > cutoff);
+        manga.chapters = manga.chapters.filter(
+          (ch) => ch.lastAccessedAt > cutoff,
+        );
         deletedCount += originalLength - manga.chapters.length;
 
-        const transaction = this.db.transaction([CACHE_INDEX_STORE], 'readwrite');
-        const store = transaction.objectStore(CACHE_INDEX_STORE);
+        const key = `${CACHE_INDEX_KEY_PREFIX}${manga.mangaId}`;
 
         if (manga.chapters.length === 0) {
-          await new Promise<void>((resolve, reject) => {
-            const request = store.delete(manga.mangaId);
-            request.onsuccess = () => resolve();
-            request.onerror = () => reject(request.error);
-          });
+          await this.storage.delete(key);
         } else {
-          manga.totalImages = manga.chapters.reduce((sum, ch) => sum + ch.imageCount, 0);
+          manga.totalImages = manga.chapters.reduce(
+            (sum, ch) => sum + ch.imageCount,
+            0,
+          );
           manga.updatedAt = Date.now();
-          await new Promise<void>((resolve, reject) => {
-            const request = store.put(manga);
-            request.onsuccess = () => resolve();
-            request.onerror = () => reject(request.error);
-          });
+          await this.storage.set(key, manga);
         }
       }
     } catch (e) {
-      console.error('[CacheIndex] Cleanup old records failed:', e);
+      console.error("[CacheIndex] Cleanup old records failed:", e);
     }
 
     return deletedCount;

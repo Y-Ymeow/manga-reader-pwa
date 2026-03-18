@@ -92,7 +92,6 @@ class CacheQueueManager {
     // 检查是否已存在相同任务
     const existingTask = this.findExistingTask(pluginId, externalId, chapterIds);
     if (existingTask) {
-      console.log('[CacheQueue] Task already exists:', existingTask.id);
       return { taskId: existingTask.id, isNew: false };
     }
 

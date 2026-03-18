@@ -27,19 +27,39 @@ import type {
   ReadFileOptions,
   WriteFileOptions,
   CopyMoveOptions,
-} from './types';
+} from "./types";
 
 /** Tauri Bridge 类型定义 */
-interface TauriBridge {
+interface TauriBridgeInternal {
   _ready: boolean;
   invoke: (cmd: string, payload: Record<string, unknown>) => Promise<unknown>;
+  audio?: {
+    play: (url: string) => Promise<void>;
+    pause: () => void;
+    resume: () => void;
+    stop: () => void;
+    setVolume: (volume: number) => void;
+    setMuted: (muted: boolean) => void;
+    setLoop: (loop: boolean) => void;
+    getState: () => Promise<{
+      positionMs: number;
+      durationMs: number;
+      isPlaying: boolean;
+    }>;
+    getPosition: () => Promise<number>;
+    getDuration: () => Promise<number>;
+    getCurrentUrl: () => Promise<string>;
+    seek: (positionMs: number) => void;
+    setProgressCallback: (callback: (state: unknown) => void) => void;
+    AdaptAudio: new (url: string) => unknown;
+  };
 }
 
 /** 全局 Tauri 对象 */
 declare global {
   interface Window {
-    __TAURI__?: TauriBridge;
-    tauri?: TauriBridge;
+    __TAURI__?: TauriBridgeInternal;
+    tauri?: TauriBridgeInternal;
   }
 }
 
@@ -50,7 +70,7 @@ export class FS implements IFS {
 
   constructor(config: FSConfig = {}) {
     this.config = {
-      baseDir: config.baseDir || '',
+      baseDir: config.baseDir || "",
       enableCache: config.enableCache ?? true,
       cacheSizeLimit: config.cacheSizeLimit ?? 1024 * 1024 * 10, // 10MB
     };
@@ -59,7 +79,7 @@ export class FS implements IFS {
   /**
    * 获取 Tauri Bridge 实例
    */
-  private getTauriBridge(): TauriBridge | null {
+  private getTauriBridge(): TauriBridgeInternal | null {
     return window.__TAURI__ || window.tauri || null;
   }
 
@@ -74,12 +94,12 @@ export class FS implements IFS {
   /**
    * 确保 FS 可用
    */
-  private ensureReady(): TauriBridge {
+  private ensureReady(): TauriBridgeInternal {
     const tauri = this.getTauriBridge();
     if (!tauri || !tauri._ready) {
       throw new Error(
-        'FS is not available. Tauri Adapt is not ready or not injected. ' +
-        'Make sure the app is running in a Tauri container with adapt.js loaded.'
+        "FS is not available. Tauri Adapt is not ready or not injected. " +
+          "Make sure the app is running in a Tauri container with adapt.js loaded.",
       );
     }
     return tauri;
@@ -90,7 +110,7 @@ export class FS implements IFS {
    */
   private resolvePath(path: string): string {
     if (this.config.baseDir) {
-      return `${this.config.baseDir}/${path.replace(/^\//, '')}`;
+      return `${this.config.baseDir}/${path.replace(/^\//, "")}`;
     }
     return path;
   }
@@ -98,7 +118,10 @@ export class FS implements IFS {
   /**
    * 调用 Tauri 命令
    */
-  private async invoke<T>(cmd: string, payload: Record<string, unknown>): Promise<T> {
+  private async invoke<T>(
+    cmd: string,
+    payload: Record<string, unknown>,
+  ): Promise<T> {
     const tauri = this.ensureReady();
     return tauri.invoke(cmd, payload) as Promise<T>;
   }
@@ -106,21 +129,24 @@ export class FS implements IFS {
   /**
    * 读取文件内容
    */
-  async readFile(path: string, options: ReadFileOptions = {}): Promise<string | Uint8Array> {
+  async readFile(
+    path: string,
+    options: ReadFileOptions = {},
+  ): Promise<string | Uint8Array> {
     const fullPath = this.resolvePath(path);
-    const encoding = options.encoding || 'utf8';
+    const encoding = options.encoding || "utf8";
 
     const result = await this.invoke<{
       content: string;
       encoding: string;
       isBase64?: boolean;
-    }>('fs_read_file', {
+    }>("fs_read_file", {
       path: fullPath,
       encoding,
     });
 
-    if (encoding === 'binary' || encoding === 'base64') {
-      if (result.isBase64 && typeof result.content === 'string') {
+    if (encoding === "binary" || encoding === "base64") {
+      if (result.isBase64 && typeof result.content === "string") {
         // 将 base64 转换为 Uint8Array
         const binaryString = atob(result.content);
         const bytes = new Uint8Array(binaryString.length);
@@ -141,7 +167,7 @@ export class FS implements IFS {
   async writeFile(
     path: string,
     content: string | Uint8Array,
-    options: WriteFileOptions = {}
+    options: WriteFileOptions = {},
   ): Promise<void> {
     const fullPath = this.resolvePath(path);
 
@@ -151,15 +177,15 @@ export class FS implements IFS {
     if (content instanceof Uint8Array) {
       // 将 Uint8Array 转换为 base64
       const binaryString = Array.from(content)
-        .map(byte => String.fromCharCode(byte))
-        .join('');
+        .map((byte) => String.fromCharCode(byte))
+        .join("");
       contentStr = btoa(binaryString);
       isBase64 = true;
     } else {
       contentStr = content;
     }
 
-    await this.invoke('fs_write_file', {
+    await this.invoke("fs_write_file", {
       path: fullPath,
       content: contentStr,
       isBase64,
@@ -179,7 +205,7 @@ export class FS implements IFS {
   async removeFile(path: string): Promise<void> {
     const fullPath = this.resolvePath(path);
 
-    await this.invoke('fs_remove_file', {
+    await this.invoke("fs_remove_file", {
       path: fullPath,
     });
 
@@ -196,7 +222,7 @@ export class FS implements IFS {
     const fullPath = this.resolvePath(path);
 
     try {
-      const result = await this.invoke<{ exists: boolean }>('fs_exists', {
+      const result = await this.invoke<{ exists: boolean }>("fs_exists", {
         path: fullPath,
       });
       return result.exists;
@@ -211,7 +237,7 @@ export class FS implements IFS {
   async createDir(path: string, recursive = true): Promise<void> {
     const fullPath = this.resolvePath(path);
 
-    await this.invoke('fs_create_dir', {
+    await this.invoke("fs_create_dir", {
       path: fullPath,
       recursive,
     });
@@ -223,7 +249,7 @@ export class FS implements IFS {
   async removeDir(path: string, recursive = false): Promise<void> {
     const fullPath = this.resolvePath(path);
 
-    await this.invoke('fs_remove_dir', {
+    await this.invoke("fs_remove_dir", {
       path: fullPath,
       recursive,
     });
@@ -235,7 +261,7 @@ export class FS implements IFS {
   async readDir(path: string): Promise<DirEntry[]> {
     const fullPath = this.resolvePath(path);
 
-    const result = await this.invoke<{ entries: DirEntry[] }>('fs_read_dir', {
+    const result = await this.invoke<{ entries: DirEntry[] }>("fs_read_dir", {
       path: fullPath,
     });
 
@@ -248,7 +274,7 @@ export class FS implements IFS {
   async stat(path: string): Promise<FileInfo> {
     const fullPath = this.resolvePath(path);
 
-    const result = await this.invoke<FileInfo>('fs_stat', {
+    const result = await this.invoke<FileInfo>("fs_stat", {
       path: fullPath,
     });
 
@@ -258,11 +284,15 @@ export class FS implements IFS {
   /**
    * 复制文件
    */
-  async copyFile(source: string, destination: string, options: CopyMoveOptions = {}): Promise<void> {
+  async copyFile(
+    source: string,
+    destination: string,
+    options: CopyMoveOptions = {},
+  ): Promise<void> {
     const fullSource = this.resolvePath(source);
     const fullDest = this.resolvePath(destination);
 
-    await this.invoke('fs_copy_file', {
+    await this.invoke("fs_copy_file", {
       source: fullSource,
       destination: fullDest,
       overwrite: options.overwrite ?? false,
@@ -276,7 +306,7 @@ export class FS implements IFS {
     const fullSource = this.resolvePath(source);
     const fullDest = this.resolvePath(destination);
 
-    await this.invoke('fs_rename', {
+    await this.invoke("fs_rename", {
       source: fullSource,
       destination: fullDest,
     });
@@ -296,7 +326,7 @@ export class FS implements IFS {
    * 读取文本文件（快捷方法）
    */
   async readTextFile(path: string): Promise<string> {
-    const result = await this.readFile(path, { encoding: 'utf8' });
+    const result = await this.readFile(path, { encoding: "utf8" });
     return result as string;
   }
 
@@ -304,7 +334,7 @@ export class FS implements IFS {
    * 读取二进制文件（快捷方法）
    */
   async readBinaryFile(path: string): Promise<Uint8Array> {
-    const result = await this.readFile(path, { encoding: 'binary' });
+    const result = await this.readFile(path, { encoding: "binary" });
     return result as Uint8Array;
   }
 
@@ -374,15 +404,15 @@ export function waitForFS(timeout = 10000): Promise<boolean> {
     // 监听 tauri-ready 事件
     const handler = () => {
       resolve(isFSAvailable());
-      window.removeEventListener('tauri-ready', handler);
+      window.removeEventListener("tauri-ready", handler);
       clearTimeout(timer);
     };
 
-    window.addEventListener('tauri-ready', handler);
+    window.addEventListener("tauri-ready", handler);
 
     // 超时处理
     const timer = setTimeout(() => {
-      window.removeEventListener('tauri-ready', handler);
+      window.removeEventListener("tauri-ready", handler);
       resolve(false);
     }, timeout);
   });

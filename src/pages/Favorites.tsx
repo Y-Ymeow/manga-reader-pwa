@@ -3,15 +3,17 @@ import { MangaCard } from '@components/manga/MangaCard';
 import { MangaGrid } from '@components/manga/MangaGrid';
 import { Button } from '@components/ui/Button';
 import { Input } from '@components/ui/Input';
-import { navigate } from '@routes/index';
+import { navigate, useRoute } from '@routes/index';
 import {
   getPlugins,
   searchManga,
   type PluginInstance,
   type Comic,
 } from '@plugins/index';
+import { pageStateActions } from '@state/page-state';
 
 export function Favorites() {
+  const { params } = useRoute();
   const [plugins, setPlugins] = useState<PluginInstance[]>([]);
   const [selectedPlugin, setSelectedPlugin] = useState<PluginInstance | null>(null);
   const [keyword, setKeyword] = useState('');
@@ -20,39 +22,91 @@ export function Favorites() {
   const [error, setError] = useState('');
   const [hasMore, setHasMore] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
+  const [maxPage, setMaxPage] = useState(1);
   const [searchOptions, setSearchOptions] = useState<string[]>([]);
+
+  // 在状态变化时自动保存到全局状态
+  useEffect(() => {
+    if (!selectedPlugin) return;
+
+    const timer = setTimeout(() => {
+      pageStateActions.setPageState('search', {
+        selectedPluginKey: selectedPlugin.key,
+        pluginName: selectedPlugin.name,
+        keyword,
+        comics,
+        maxPage,
+        currentPage,
+        hasMore,
+        searchOptions,
+      });
+    }, 500);
+
+    return () => clearTimeout(timer);
+  }, [keyword, comics, maxPage, currentPage, hasMore, searchOptions, selectedPlugin]);
 
   // 加载插件列表
   useEffect(() => {
     const loadedPlugins = getPlugins();
     const searchablePlugins = loadedPlugins.filter(p => p.search);
     setPlugins(searchablePlugins);
+    
+    // 如果是从历史记录返回，恢复状态
+    if (params?.restore === 'true' && params?.pluginKey) {
+      const savedState = pageStateActions.getPageState('search');
+      if (savedState.selectedPluginKey === params.pluginKey && savedState.comics.length > 0) {
+        const plugin = loadedPlugins.find(p => p.key === params.pluginKey);
+        if (plugin) {
+          setSelectedPlugin(plugin);
+          setComics(savedState.comics);
+          setMaxPage(savedState.maxPage);
+          setCurrentPage(savedState.currentPage);
+          setHasMore(savedState.hasMore);
+          setSearchOptions(savedState.searchOptions);
+          setKeyword(savedState.keyword);
+          return;
+        }
+      }
+    }
+    
     if (searchablePlugins.length > 0 && !selectedPlugin) {
       setSelectedPlugin(searchablePlugins[0]);
       // 初始化搜索选项
       if (searchablePlugins[0].search?.optionList) {
-        const defaults = searchablePlugins[0].search.optionList.map(opt => 
+        const defaults = searchablePlugins[0].search.optionList.map(opt =>
           opt.options[0]?.split('-')[0] || ''
         );
         setSearchOptions(defaults);
       }
     }
-  }, []);
+  }, [params?.restore, params?.pluginKey]);
 
   // 切换插件时重置选项
   useEffect(() => {
     if (selectedPlugin?.search?.optionList) {
-      const defaults = selectedPlugin.search.optionList.map(opt => 
+      const defaults = selectedPlugin.search.optionList.map(opt =>
         opt.options[0]?.split('-')[0] || ''
       );
       setSearchOptions(defaults);
     } else {
       setSearchOptions([]);
     }
-    // 清空搜索结果
-    setComics([]);
-    setCurrentPage(1);
-    setHasMore(false);
+    
+    // 尝试从全局状态恢复
+    const savedState = pageStateActions.getPageState('search');
+    if (savedState.selectedPluginKey === selectedPlugin?.key && savedState.comics.length > 0) {
+      setComics(savedState.comics);
+      setMaxPage(savedState.maxPage);
+      setCurrentPage(savedState.currentPage);
+      setHasMore(savedState.hasMore);
+      setSearchOptions(savedState.searchOptions);
+      setKeyword(savedState.keyword);
+    } else {
+      // 清空搜索结果
+      setComics([]);
+      setCurrentPage(1);
+      setHasMore(false);
+    }
   }, [selectedPlugin]);
 
   const handleSearch = async (page = 1) => {
@@ -94,6 +148,18 @@ export function Favorites() {
   };
 
   const handleMangaClick = (comic: Comic) => {
+    // 添加历史记录
+    pageStateActions.pushHistory('search', {
+      selectedPluginKey: selectedPlugin?.key || '',
+      pluginName: selectedPlugin?.name,
+      keyword,
+      comics,
+      maxPage,
+      currentPage,
+      hasMore,
+      searchOptions,
+    });
+
     navigate('manga', { id: `${selectedPlugin?.key}:${comic.id}` });
   };
 
@@ -135,13 +201,21 @@ export function Favorites() {
             placeholder="输入关键词搜索..."
             value={keyword}
             onChange={(value) => setKeyword(value)}
+            disabled={loading}
             className="flex-1"
           />
           <Button
             onClick={() => handleSearch(1)}
             disabled={loading || !keyword.trim()}
           >
-            {loading ? '...' : '搜索'}
+            {loading ? (
+              <span class="flex items-center gap-1">
+                <span class="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
+                搜索中...
+              </span>
+            ) : (
+              '搜索'
+            )}
           </Button>
         </div>
 
@@ -153,7 +227,10 @@ export function Favorites() {
                 <select
                   value={searchOptions[index] || ''}
                   onChange={(e) => handleOptionChange(index, (e.target as HTMLSelectElement).value)}
-                  class="bg-[#16213e] text-white text-sm rounded px-2 py-1 border border-[#2a2a4a] focus:outline-none focus:border-[#e94560]"
+                  disabled={loading}
+                  class={`bg-[#16213e] text-white text-sm rounded px-2 py-1 border border-[#2a2a4a] focus:outline-none focus:border-[#e94560] ${
+                    loading ? 'opacity-50 cursor-not-allowed' : ''
+                  }`}
                 >
                   {optionGroup.options.map((opt) => {
                     const [value, label] = opt.split('-');
@@ -166,6 +243,12 @@ export function Favorites() {
                 </select>
               </div>
             ))}
+          </div>
+        )}
+        {loading && (
+          <div class="flex items-center gap-2 mt-3 text-sm text-gray-400">
+            <span class="w-4 h-4 border-2 border-[#e94560] border-t-transparent rounded-full animate-spin" />
+            <span>正在搜索漫画，请稍候...</span>
           </div>
         )}
       </header>

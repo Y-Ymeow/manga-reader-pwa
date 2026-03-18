@@ -15,7 +15,6 @@ const migrations: Migration[] = [
     name: 'Initial schema',
     up: async () => {
       // 初始版本，由 DatabaseManager 创建基础表结构
-      console.log('Running migration v1: Initial schema');
     },
   },
 ];

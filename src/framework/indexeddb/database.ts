@@ -35,7 +35,7 @@ export class DatabaseManager {
    */
   private log(...args: unknown[]): void {
     if (this.config.debug) {
-      console.log('[IndexedDB]', ...args);
+      // console.log('[IndexedDB]', ...args);
     }
   }
 
@@ -53,10 +53,6 @@ export class DatabaseManager {
     if (this.initialized) return;
 
     return new Promise((resolve, reject) => {
-      let migrationComplete = false;
-      let migrationError: Error | null = null;
-      let upgradeNeeded = false;
-
       const request = indexedDB.open(this.config.name, this.config.version);
 
       request.onerror = () => {
@@ -64,8 +60,14 @@ export class DatabaseManager {
         reject(new Error(`Failed to open database: ${request.error?.message}`));
       };
 
+      request.onsuccess = () => {
+        this.db = request.result;
+        this.initialized = true;
+        this.log('Database opened successfully, version:', this.db.version);
+        resolve();
+      };
+
       request.onupgradeneeded = (event) => {
-        upgradeNeeded = true;
         const db = (event.target as IDBOpenDBRequest).result;
         const transaction = (event.target as IDBOpenDBRequest).transaction;
         const oldVersion = event.oldVersion;
@@ -75,50 +77,9 @@ export class DatabaseManager {
 
         // 执行迁移
         if (transaction) {
-          // 监听 transaction complete 事件
-          transaction.oncomplete = () => {
-            this.log('Upgrade transaction completed');
-            migrationComplete = true;
-          };
-          
-          transaction.onerror = () => {
-            this.error('Upgrade transaction failed:', transaction.error);
-            migrationError = new Error(`Migration failed: ${transaction.error?.message}`);
-          };
-
-          // 执行迁移
           this.runMigrations(db, transaction, oldVersion, newVersion).catch((err) => {
             this.error('Migration failed:', err);
-            migrationError = err;
           });
-        }
-      };
-
-      request.onsuccess = () => {
-        // 如果有 upgrade，等待 migration 完成
-        if (upgradeNeeded) {
-          // 轮询等待 migration 完成
-          const checkComplete = () => {
-            if (migrationError) {
-              reject(migrationError);
-              return;
-            }
-            if (migrationComplete) {
-              this.db = request.result;
-              this.initialized = true;
-              this.log('Database opened successfully, version:', this.db.version);
-              resolve();
-            } else {
-              setTimeout(checkComplete, 10);
-            }
-          };
-          checkComplete();
-        } else {
-          // 没有 upgrade，直接 resolve
-          this.db = request.result;
-          this.initialized = true;
-          this.log('Database opened successfully, version:', this.db.version);
-          resolve();
         }
       };
     });
@@ -408,9 +369,17 @@ export class DatabaseManager {
       const store = transaction.objectStore(storeName);
 
       const count = await new Promise<number>((resolve, reject) => {
-        const request = store.count();
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () => reject(request.error);
+        // 某些浏览器（如旧版 Safari）不支持 count() 方法，使用 getAllKeys 替代
+        if (typeof store.count === 'function') {
+          const request = store.count();
+          request.onsuccess = () => resolve(request.result);
+          request.onerror = () => reject(request.error);
+        } else {
+          // 回退方案：使用 getAllKeys 获取所有键然后计数
+          const request = store.getAllKeys();
+          request.onsuccess = () => resolve((request.result as any[]).length);
+          request.onerror = () => reject(request.error);
+        }
       });
 
       stats.counts[storeName] = count;

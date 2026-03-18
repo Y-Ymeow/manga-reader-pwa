@@ -10,7 +10,7 @@ import { getPlugins } from '@plugins/index';
 interface CacheStats {
   totalSize: number;
   fileCount: number;
-  storageType: 'opfs' | 'fs' | 'indexeddb';
+  storageType: 'opfs' | 'local' | 'indexeddb';
 }
 
 interface DbCacheStats {
@@ -336,8 +336,8 @@ export function CacheManager() {
     switch (type) {
       case 'opfs':
         return 'OPFS (浏览器私有文件系统)';
-      case 'fs':
-        return '文件系统 (Tauri)';
+      case 'local':
+        return 'LocalStorage (Tauri 数据库)';
       case 'indexeddb':
         return 'IndexedDB';
       default:
@@ -369,7 +369,7 @@ export function CacheManager() {
           <>
             {/* 统计卡片 */}
             <div class="bg-[#16213e] rounded-xl p-4">
-              <h2 class="text-white font-medium mb-3">图片缓存 (OPFS/文件系统)</h2>
+              <h2 class="text-white font-medium mb-3">图片缓存 (OPFS/LocalStorage)</h2>
               {stats ? (
                 <div class="space-y-2 text-sm">
                   <div class="flex justify-between">

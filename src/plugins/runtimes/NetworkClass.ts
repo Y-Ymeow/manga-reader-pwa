@@ -13,7 +13,6 @@ if (externalAdapter) {
 } else {
   // 降级到 fetch
   requestManager.register(new FetchAdapter());
-  console.log('request')
 }
 
 export {requestManager};
@@ -45,7 +44,6 @@ export class NetworkClass {
         if (responseText.includes('cdn-cgi/challenge-platform') ||
             responseText.includes('Just a moment') ||
             responseText.includes('cf_chl')) {
-          console.log('[Network] Detected CF challenge:', url);
           // 触发全局 CF 挑战回调
           import('../../components/CfChallengeModal').then(({ triggerCfChallenge }) => {
             triggerCfChallenge(url);
@@ -66,7 +64,6 @@ export class NetworkClass {
       // 请求错误时，如果状态码是 403/503，也触发 CF 挑战提示
       // 因为错误时拿不到响应内容，所以只要状态码符合就认为是 CF 挑战
       if (error.status === 403 || error.status === 503) {
-        console.log('[Network] Detected CF challenge (error status):', url);
         import('../../components/CfChallengeModal').then(({ triggerCfChallenge }) => {
           triggerCfChallenge(url);
         });
@@ -99,7 +96,6 @@ export class NetworkClass {
         if (responseText.includes('cdn-cgi/challenge-platform') ||
             responseText.includes('Just a moment') ||
             responseText.includes('cf_chl')) {
-          console.log('[Network] Detected CF challenge:', url);
           // 触发全局 CF 挑战回调
           import('../../components/CfChallengeModal').then(({ triggerCfChallenge }) => {
             triggerCfChallenge(url);
@@ -120,7 +116,6 @@ export class NetworkClass {
       // 请求错误时，如果状态码是 403/503，也触发 CF 挑战提示
       // 因为错误时拿不到响应内容，所以只要状态码符合就认为是 CF 挑战
       if (error.status === 403 || error.status === 503) {
-        console.log('[Network] Detected CF challenge (error status):', url);
         import('../../components/CfChallengeModal').then(({ triggerCfChallenge }) => {
           triggerCfChallenge(url);
         });

@@ -155,7 +155,6 @@ export function Reader({ mangaId, chapterId, pluginKey, page }: ReaderProps) {
   }, [processedImages]);
   // 加载漫画和章节数据
   useEffect(() => {
-    console.log("data: ", mangaId, chapterId, pluginKey, page);
     if (!mangaId || !chapterId) {
       setLoading(false);
       return;
@@ -360,10 +359,6 @@ export function Reader({ mangaId, chapterId, pluginKey, page }: ReaderProps) {
       );
 
       if (cachedImageUrls && cachedImageUrls.length > 0) {
-        console.log(
-          "[Reader] Using cached image URLs from index:",
-          cachedImageUrls.length,
-        );
         // 更新最后访问时间
         await cacheIndex.updateLastAccessed(
           mangaData.externalId,
@@ -383,7 +378,6 @@ export function Reader({ mangaId, chapterId, pluginKey, page }: ReaderProps) {
     // 尝试从旧的内存缓存加载（兼容旧数据）
     const cached = await getCachedChapterImages(chapterData.id);
     if (cached && cached.length > 0) {
-      console.log("[Reader] Using old cached image URLs:", cached.length);
       await processImageUrls(
         mangaData.pluginId || pluginKey || "",
         mangaData.externalId || "",
@@ -463,18 +457,10 @@ export function Reader({ mangaId, chapterId, pluginKey, page }: ReaderProps) {
       const epId = chapterId.includes("/")
         ? chapterId.split("/")[0]
         : chapterId;
-      console.log(
-        "[processImageUrls] chapterId:",
-        chapterId,
-        "-> epId:",
-        epId,
-        "total:",
-        urls.length,
-      );
+
       // 检查是否已处理过这个章节，避免重复加载
       const chapterCacheKey = `${comicId}_${chapterId}`;
       if (processedChapterIds.current.has(chapterCacheKey)) {
-        console.log("[processImageUrls] Chapter already processed, skipping");
         return;
       }
       processedChapterIds.current.add(chapterCacheKey);
@@ -486,7 +472,6 @@ export function Reader({ mangaId, chapterId, pluginKey, page }: ReaderProps) {
       for (let i = 0; i < urls.length; i++) {
         const offlineUrl = await getOfflineImageUrl(comicId, chapterId, i);
         if (offlineUrl) {
-          console.log(`[processImageUrls] Image ${i} using offline cache`);
           processedWithCache.push({
             url: offlineUrl,
             originalUrl: urls[i],

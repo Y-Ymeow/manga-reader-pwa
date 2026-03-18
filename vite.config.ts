@@ -117,7 +117,8 @@ export default defineConfig({
       '@plugins': resolve(__dirname, 'src/plugins'),
       '@db': resolve(__dirname, 'src/db'),
       '@fs': resolve(__dirname, 'src/fs'),
-      '@framework': resolve(__dirname, 'src/framework')
+      '@framework': resolve(__dirname, 'src/framework'),
+      '@state': resolve(__dirname, 'src/state')
     }
   },
   build: {

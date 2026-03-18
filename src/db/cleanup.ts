@@ -45,11 +45,19 @@ export async function getDatabaseStats(): Promise<DatabaseCleanupResult[]> {
           const tx = db.transaction([storeName], 'readonly');
           const store = tx.objectStore(storeName);
           const count = await new Promise<number>((resolve, reject) => {
-            const req = store.count();
-            req.onsuccess = () => resolve(req.result);
-            req.onerror = () => reject(req.error);
+            // 某些浏览器（如旧版 Safari）不支持 count() 方法，使用 getAllKeys 替代
+            if (typeof store.count === 'function') {
+              const req = store.count();
+              req.onsuccess = () => resolve(req.result);
+              req.onerror = () => reject(req.error);
+            } else {
+              // 回退方案：使用 getAllKeys 获取所有键然后计数
+              const req = store.getAllKeys();
+              req.onsuccess = () => resolve((req.result as any[]).length);
+              req.onerror = () => reject(req.error);
+            }
           });
-          
+
           results.push({
             storeName,
             success: true,

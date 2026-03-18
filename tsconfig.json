@@ -38,7 +38,8 @@
       "@plugins/*": ["src/plugins/*"],
       "@db/*": ["src/db/*"],
       "@fs/*": ["src/fs/*"],
-      "@framework/*": ["src/framework/*"]
+      "@framework/*": ["src/framework/*"],
+      "@state/*": ["src/state/*"]
     }
   },
   "include": ["src"]

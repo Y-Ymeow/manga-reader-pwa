@@ -21,6 +21,23 @@ import { EventBus, WorkerManager, createEventBus, createWorker, createWorkerPool
 import { Compression, createCompression, compressText, decompressText, compressObject, decompressObject } from './storages';
 import { FetchAdapter } from './requests/adapters/fetch';
 import { FS, createFS, getFS, setFS, isFSAvailable, waitForFS } from './fs';
+import {
+  SQLiteStorage,
+  SQLiteModel,
+  SQLiteDatabaseManager,
+  SQLiteQueryBuilder,
+  createSQLiteStorage,
+  createSQLiteModel as createSQLiteModelFn,
+  createSQLiteDB,
+  getGlobalSQLiteStorage,
+  getSQLiteDB,
+  initSQLite,
+  getSQLite,
+  defineSQLiteModel,
+  createModel as createSQLiteModelHelper,
+  setGlobalBridge as setSQLiteGlobalBridge,
+  getGlobalBridge as getSQLiteGlobalBridge,
+} from './sqlite';
 
 import type { CoreConfig } from './ai/core';
 import type { OpenAIConfig } from './ai/providers/openai';
@@ -32,6 +49,16 @@ import type { AgentConfig, AgentHooks } from './agent';
 import type { StateConfig, StateSlice } from './state';
 import type { WorkerOptions, WorkerPoolOptions } from './utils';
 import type { CompressionOptions } from './storages';
+import type {
+  SQLiteBridge,
+  SQLiteStorageConfig,
+  SQLiteModelConfig,
+  SQLiteModelData,
+  SQLiteModelQueryOptions,
+  SQLiteDatabaseConfig,
+  EAVRecord,
+  SQLiteFilterCondition,
+} from './sqlite';
 
 // 重新导出 FetchAdapter 以兼容旧代码
 export type { FetchAdapter } from './requests/adapters/fetch';
@@ -507,4 +534,83 @@ export {
   setFS,
   isFSAvailable as checkFSAvailable,
   waitForFS as waitForFSReady,
+};
+
+// ==================== SQLite ====================
+
+/**
+ * 初始化 SQLite 存储
+ * @param bridge Tauri 桥接对象
+ * @param config 配置选项
+ */
+export function initSQLiteStorage(bridge: SQLiteBridge, config?: SQLiteStorageConfig): SQLiteStorage {
+  return initSQLite(bridge, config);
+}
+
+/**
+ * 获取 SQLite 存储实例
+ * @param config 配置选项
+ */
+export function getSQLiteStorage(config?: SQLiteStorageConfig): SQLiteStorage {
+  return getSQLite(config);
+}
+
+/**
+ * 创建 SQLite 数据库管理器
+ * @param bridge Tauri 桥接对象
+ * @param config 数据库配置
+ */
+export function initSQLiteDB(bridge: SQLiteBridge, config?: SQLiteDatabaseConfig): SQLiteDatabaseManager {
+  return createSQLiteDB(bridge, config);
+}
+
+/**
+ * 获取 SQLite 数据库管理器
+ * @param name 数据库名称
+ * @param config 数据库配置
+ */
+export function getSQLiteDBManager(name: string, config?: Omit<SQLiteDatabaseConfig, 'name'>): SQLiteDatabaseManager {
+  const bridge = getSQLiteGlobalBridge();
+  return getSQLiteDB(bridge, name, config);
+}
+
+/**
+ * 创建 SQLite 模型
+ * @param storage SQLite 存储实例
+ * @param tableName 表名
+ * @param config 模型配置
+ */
+export function defineSQLiteModelClass<T extends SQLiteModelData>(
+  storage: SQLiteStorage,
+  tableName: string,
+  config?: SQLiteModelConfig
+): SQLiteModel<T> {
+  return defineSQLiteModel<T>(storage, tableName, config);
+}
+
+/**
+ * 快速创建模型（使用全局存储）
+ * @param tableName 表名
+ * @param config 模型配置
+ */
+export function createSQLiteModel<T extends SQLiteModelData>(
+  tableName: string,
+  config?: SQLiteModelConfig
+): SQLiteModel<T> {
+  return createSQLiteModelHelper<T>(tableName, config);
+}
+
+// 重新导出 SQLite
+export {
+  SQLiteStorage,
+  SQLiteModel,
+  SQLiteDatabaseManager,
+  SQLiteQueryBuilder,
+  createSQLiteStorage,
+  createSQLiteModel as createSQLiteModelInstance,
+  createSQLiteDB,
+  getGlobalSQLiteStorage,
+  getSQLiteDB,
+  setSQLiteGlobalBridge as setSQLiteBridge,
+  getSQLiteGlobalBridge as getSQLiteBridge,
 };

@@ -192,7 +192,6 @@ export async function loadPlugin(
       const value = await loadPluginSetting(plugin.key, key);
       if (value !== null && (instance as any)._loadSettingFromStorage) {
         (instance as any)._loadSettingFromStorage(key, value);
-        console.log(`[Plugin] Loaded setting: ${plugin.key}.${key} =`, value);
       } else {
         // 没有保存过的设置，使用默认值并保存
         const defaultValue = plugin.settings[key]?.default;
@@ -202,19 +201,9 @@ export async function loadPlugin(
         ) {
           (instance as any)._loadSettingFromStorage(key, defaultValue);
           await savePluginSetting(plugin.key, key, defaultValue);
-          console.log(
-            `[Plugin] Saved default setting: ${plugin.key}.${key} =`,
-            defaultValue,
-          );
           hasNewSettings = true;
         }
       }
-    }
-
-    if (hasNewSettings) {
-      console.log(
-        `[Plugin] Initialized ${Object.keys(plugin.settings).length} settings for ${plugin.key}`,
-      );
     }
   }
 
@@ -223,9 +212,6 @@ export async function loadPlugin(
     const allData = await loadAllPluginData(plugin.key);
     if (Object.keys(allData).length > 0) {
       (instance as any)._loadDataFromStorage(allData);
-      console.log(
-        `[Plugin] Loaded ${Object.keys(allData).length} data entries for ${plugin.key}`,
-      );
     }
   } catch (e) {
     console.warn(`[Plugin] Failed to load data for ${plugin.key}:`, e);
@@ -350,7 +336,7 @@ export async function loadSourceList(
   const data = await response.json();
 
   if (save) {
-    saveSourceListUrl(url);
+    await saveSourceListUrl(url);
   }
 
   return data;
@@ -359,8 +345,8 @@ export async function loadSourceList(
 /**
  * 获取保存的源列表地址
  */
-export function getSavedSourceListUrl(): string | null {
-  return getSourceListUrl();
+export async function getSavedSourceListUrl(): Promise<string | null> {
+  return await getSourceListUrl();
 }
 
 /**
@@ -413,46 +399,19 @@ async function doRestorePlugins(): Promise<void> {
   try {
     // 确保存储已初始化
     await initPluginStorage();
-    // 从 IndexedDB 获取插件代码列表
-    const { listStoredPlugins } = await import("./storage");
+    // 从存储获取插件代码列表
+    const { listStoredPlugins, loadPluginCode } = await import("./storage");
     const pluginKeys = await listStoredPlugins();
 
     for (const key of pluginKeys) {
       try {
         const code = await loadPluginCode(key);
         if (code) {
-          await loadPlugin(code, false); // 不重复保存，会自动检查是否需要 init
+          await loadPlugin(code, false);
         }
       } catch (e) {
         console.error(`Failed to restore plugin ${key}:`, e);
       }
-    }
-
-    // 如果数据库已初始化，也尝试从数据库恢复（用于迁移或补充）
-    try {
-      const { waitForDatabase } = await import("../db/global");
-      await waitForDatabase();
-      const db = await import("../db");
-      const PluginModel = db.Plugin;
-      const records = await PluginModel.findMany({
-        where: { isEnabled: true },
-      });
-      for (const record of records) {
-        // 如果插件已加载，跳过
-        if (plugins.has(record.key)) continue;
-
-        try {
-          const code = await loadPluginCode(record.key);
-          if (code) {
-            await loadPlugin(code, false); // 不重复保存，会自动检查是否需要 init
-          }
-        } catch (e) {
-          console.error(`Failed to restore plugin ${record.key}:`, e);
-        }
-      }
-    } catch (e) {
-      // 数据库可能未初始化，忽略
-      console.log("[Plugin] Database not available for plugin restore");
     }
   } catch (e) {
     console.error("Failed to restore plugins:", e);
@@ -554,7 +513,6 @@ export async function processImageLoad(
             responseText.includes("Just a moment") ||
             responseText.includes("cf_chl")
           ) {
-            console.log("[processImageLoad] Detected CF challenge");
             // 触发全局 CF 挑战回调
             import("../components/CfChallengeModal").then(
               ({ triggerCfChallenge }) => {
@@ -728,7 +686,6 @@ export async function getChapterImages(
   if (plugin.comic?.loadEp) {
     const result = await plugin.comic.loadEp(comicId, chapterId);
     if (result && Array.isArray(result.images)) {
-      console.log("[processImageUrls] Loaded images:", result.images.length);
       return result.images;
     }
     throw new Error("Plugin loadEp returned invalid format");
@@ -747,6 +704,5 @@ export async function getCategoryData(
   if (!plugin?.category) {
     return null;
   }
-  console.log(plugin.category);
   return plugin.category;
 }
