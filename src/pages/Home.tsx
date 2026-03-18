@@ -1,38 +1,48 @@
-import { useState, useEffect } from 'preact/hooks';
-import { navigate } from '@routes/index';
-import { Manga, Category, ChapterList } from '@db/index';
-import type { MangaRecord, CategoryRecord, ChapterListRecord } from '@db/index';
-import { Button } from '@components/ui/Button';
-import { Input } from '@components/ui/Input';
+import { useState, useEffect } from "preact/hooks";
+import { navigate } from "@routes/index";
+import { Manga, Category, ChapterList } from "@db/index";
+import type { MangaRecord, CategoryRecord, ChapterListRecord } from "@db/index";
+import { waitForDatabase } from "@db/global";
+import { Button } from "@components/ui/Button";
+import { Input } from "@components/ui/Input";
 
 interface HomeProps {}
 
 export function Home({}: HomeProps) {
   const [mangas, setMangas] = useState<MangaRecord[]>([]);
   const [categories, setCategories] = useState<CategoryRecord[]>([]);
-  const [activeCategory, setActiveCategory] = useState<string>('all');
+  const [activeCategory, setActiveCategory] = useState<string>("all");
   const [loading, setLoading] = useState(true);
-  
+
   // 分类管理相关
   const [showCategoryManager, setShowCategoryManager] = useState(false);
-  const [newCategoryName, setNewCategoryName] = useState('');
-  const [editingCategory, setEditingCategory] = useState<{ id: string | number; name: string } | null>(null);
-  const [editCategoryName, setEditCategoryName] = useState('');
-  const [deleteConfirmId, setDeleteConfirmId] = useState<string | number | null>(null);
+  const [newCategoryName, setNewCategoryName] = useState("");
+  const [editingCategory, setEditingCategory] = useState<{
+    id: string | number;
+    name: string;
+  } | null>(null);
+  const [editCategoryName, setEditCategoryName] = useState("");
+  const [deleteConfirmId, setDeleteConfirmId] = useState<
+    string | number | null
+  >(null);
 
   // 加载分类和漫画
   useEffect(() => {
     const loadData = async () => {
       setLoading(true);
       try {
+        // 确保数据库已初始化
+        await waitForDatabase();
+        
         // 加载分类
-        const cats = await Category.findMany({ orderBy: { sort: 'asc' } });
+        const cats = await Category.findMany({ sort: 'sort' });
         setCategories(cats as CategoryRecord[]);
 
         // 加载漫画
         await loadMangas(activeCategory);
       } catch (e) {
-        console.error('Failed to load home data:', e);
+        console.debug(await Category.findMany({ sort: 'sort' }));
+        console.error("Failed to load home data:", e);
       } finally {
         setLoading(false);
       }
@@ -45,60 +55,63 @@ export function Home({}: HomeProps) {
     try {
       let mangasData: MangaRecord[];
 
-      if (categoryId === 'all') {
+      if (categoryId === "all") {
         // 全部漫画
-        mangasData = await Manga.findMany({
+        mangasData = (await Manga.findMany({
           where: { isFavorite: true },
-          orderBy: { favoriteAt: 'desc' },
-        }) as MangaRecord[];
+          sort: { field: 'favoriteAt', order: 'desc' },
+        })) as MangaRecord[];
       } else {
         // 特定分类
-        mangasData = await Manga.findMany({
+        mangasData = (await Manga.findMany({
           where: { isFavorite: true, categoryId },
-          orderBy: { favoriteAt: 'desc' },
-        }) as MangaRecord[];
+          sort: { field: 'favoriteAt', order: 'desc' },
+        })) as MangaRecord[];
       }
 
       setMangas(mangasData);
     } catch (e) {
-      console.error('Failed to load mangas:', e);
+      console.error("Failed to load mangas:", e);
     }
   };
 
   // 创建分类
   const handleCreateCategory = async () => {
     if (!newCategoryName.trim()) return;
-    
+
     try {
-      const maxSort = categories.reduce((max, cat) => Math.max(max, cat.sort || 0), 0);
+      const maxSort = categories.reduce(
+        (max, cat) => Math.max(max, cat.sort || 0),
+        0,
+      );
       await Category.create({
         name: newCategoryName.trim(),
         sort: maxSort + 1,
       });
-      setNewCategoryName('');
+      setNewCategoryName("");
       // 重新加载分类
-      const cats = await Category.findMany({ orderBy: { sort: 'asc' } });
+      const cats = await Category.findMany({ sort: 'sort' });
       setCategories(cats as CategoryRecord[]);
     } catch (e) {
-      console.error('Failed to create category:', e);
+      console.error("Failed to create category:", e);
     }
   };
 
   // 编辑分类
   const handleEditCategory = async () => {
     if (!editingCategory || !editCategoryName.trim()) return;
-    
+
     try {
       await Category.update(editingCategory.id, {
         name: editCategoryName.trim(),
       });
       setEditingCategory(null);
-      setEditCategoryName('');
+      setEditCategoryName("");
       // 重新加载分类
-      const cats = await Category.findMany({ orderBy: { sort: 'asc' } });
+      const cats = await Category.findMany({ sort: 'sort' });
       setCategories(cats as CategoryRecord[]);
     } catch (e) {
-      console.error('Failed to edit category:', e);
+      console.error("Failed to edit category:", e);
     }
   };
 
@@ -106,19 +119,22 @@ export function Home({}: HomeProps) {
   const handleDeleteCategory = async (id: string | number) => {
     try {
       // 先将该分类下的漫画移到"全部"
-      await Manga.updateMany({ categoryId: String(id) }, { categoryId: undefined });
+      await Manga.updateMany(
+        { categoryId: String(id) },
+        { categoryId: undefined },
+      );
       // 删除分类
       await Category.delete(id);
       // 重新加载分类
-      const cats = await Category.findMany({ orderBy: { sort: 'asc' } });
+      const cats = await Category.findMany({ sort: 'sort' });
       setCategories(cats as CategoryRecord[]);
       // 如果当前选中的是被删除的分类，切换到"全部"
       if (activeCategory === String(id)) {
-        setActiveCategory('all');
+        setActiveCategory("all");
       }
       setDeleteConfirmId(null);
     } catch (e) {
-      console.error('Failed to delete category:', e);
+      console.error("Failed to delete category:", e);
     }
   };
 
@@ -128,11 +144,11 @@ export function Home({}: HomeProps) {
   };
 
   const handleMangaClick = (manga: MangaRecord) => {
-    navigate('manga', { id: manga.id });
+    navigate("manga", { id: manga.id });
   };
 
   const handleExplore = () => {
-    navigate('explore');
+    navigate("explore");
   };
 
   if (loading) {
@@ -159,11 +175,11 @@ export function Home({}: HomeProps) {
       {/* Category Tabs */}
       <div class="flex gap-2 px-4 py-3 overflow-x-auto scrollbar-hide border-b border-gray-800 items-center">
         <button
-          onClick={() => setActiveCategory('all')}
+          onClick={() => setActiveCategory("all")}
           class={`px-4 py-1.5 rounded-full text-sm whitespace-nowrap transition-colors ${
-            activeCategory === 'all'
-              ? 'bg-[#e94560] text-white'
-              : 'bg-[#16213e] text-gray-400 hover:bg-[#1a4a7a]'
+            activeCategory === "all"
+              ? "bg-[#e94560] text-white"
+              : "bg-[#16213e] text-gray-400 hover:bg-[#1a4a7a]"
           }`}
         >
           全部
@@ -174,8 +190,8 @@ export function Home({}: HomeProps) {
             onClick={() => setActiveCategory(cat.id)}
             class={`px-4 py-1.5 rounded-full text-sm whitespace-nowrap transition-colors ${
               activeCategory === cat.id
-                ? 'bg-[#e94560] text-white'
-                : 'bg-[#16213e] text-gray-400 hover:bg-[#1a4a7a]'
+                ? "bg-[#e94560] text-white"
+                : "bg-[#16213e] text-gray-400 hover:bg-[#1a4a7a]"
             }`}
           >
             {cat.name}
@@ -222,7 +238,7 @@ export function Home({}: HomeProps) {
                 </div>
                 <p class="mt-1.5 text-sm text-white truncate">{manga.title}</p>
                 <p class="text-xs text-gray-500 truncate">
-                  {manga.author || '未知作者'}
+                  {manga.author || "未知作者"}
                 </p>
               </div>
             ))}
@@ -290,7 +306,7 @@ export function Home({}: HomeProps) {
                         <Button
                           onClick={() => {
                             setEditingCategory(null);
-                            setEditCategoryName('');
+                            setEditCategoryName("");
                           }}
                           variant="secondary"
                           size="sm"

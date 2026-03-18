@@ -1,7 +1,7 @@
 /**
  * SQLite Module
- * SQLite EAV 存储模块 - 替代 IndexedDB 的灵活实现
- * 
+ * SQLite 存储模块 - 支持 EAV 和 Table 双模式
+ *
  * @example
  * ```typescript
  * import {
@@ -9,25 +9,41 @@
  *   SQLiteModel,
  *   SQLiteDatabaseManager,
  *   SQLiteQueryBuilder,
+ *   SQLiteTable,
+ *   SQLiteDatabase,
+ *   EAVStorage,
  *   createSQLiteStorage,
  *   createSQLiteModel,
  *   createSQLiteDB,
+ *   createSQLiteTable,
+ *   createEAVStorage,
  *   getGlobalSQLiteStorage,
  *   getSQLiteDB
  * } from './sqlite';
- * 
- * // 方式 1: 直接使用存储
- * const storage = createSQLiteStorage(bridge);
+ *
+ * // EAV 模式（适合结构不固定的数据）
+ * const storage = createSQLiteStorage(bridge, { dbName: 'my-app', mode: 'eav' });
+ * await storage.init();
  * await storage.upsert('users', 'user1', { name: '张三', age: 25 });
  * const user = await storage.findOne('users', 'user1');
- * 
- * // 方式 2: 使用模型
+ *
+ * // Table 模式（适合结构固定的数据，性能更好）
+ * const storage = createSQLiteStorage(bridge, { dbName: 'my-app', mode: 'table' });
+ * await storage.createTable('users', `
+ *   id INTEGER PRIMARY KEY AUTOINCREMENT,
+ *   name TEXT NOT NULL,
+ *   age INTEGER
+ * `);
+ * await storage.tableInsert('users', { name: '张三', age: 25 });
+ * const users = await storage.find('users');
+ *
+ * // 使用模型层
  * const db = createSQLiteDB(bridge, { name: 'my-app' });
  * await db.init();
  * const User = db.model('users', { primaryKey: 'id' });
  * const user = await User.create({ id: 'user1', name: '张三', age: 25 });
- * 
- * // 方式 3: 使用查询构建器
+ *
+ * // 使用查询构建器
  * const users = await User.query()
  *   .where('age', '>=', 18)
  *   .orderBy('createdAt', 'desc')
@@ -42,6 +58,7 @@ export type {
   SQLiteResult,
   EAVRecord,
   SQLiteQueryOptions,
+  QueryOptions,
   SQLiteStorageConfig,
   ISQLiteStorage,
   SQLiteModelConfig,
@@ -53,9 +70,12 @@ export type {
   SQLiteBatchResult,
   SQLiteChangeLog,
   SQLiteDatabaseConfig,
+  StorageMode,
+  TableSchema,
+  TableQueryOptions,
 } from './types';
 
-// 存储
+// 存储（支持 EAV 和 Table 双模式）
 export {
   SQLiteStorage,
   createSQLiteStorage,
@@ -63,6 +83,21 @@ export {
   setGlobalSQLiteStorage,
   clearGlobalSQLiteStorage,
 } from './storage';
+
+// EAV 模式
+export {
+  EAVStorage,
+  createEAVStorage,
+  getPwaIdFromUrl,
+} from './eav';
+
+// Table 模式（原生 SQLite）
+export {
+  SQLiteTable,
+  createSQLiteTable,
+  SQLiteDatabase,
+  createSQLiteDatabase,
+} from './sqlite';
 
 // 模型
 export {
@@ -89,6 +124,8 @@ export {
   initSQLite,
   getSQLite,
   removeSQLite,
+  getSQLiteDBHelper,
+  removeSQLiteDBHelper,
   defineSQLiteModel,
   createModel,
   setGlobalBridge,

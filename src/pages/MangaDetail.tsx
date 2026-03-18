@@ -223,7 +223,7 @@ export function MangaDetail({ mangaId, onBack }: MangaDetailProps) {
   useEffect(() => {
     const loadCategories = async () => {
       try {
-        const cats = await Category.findMany({ orderBy: { sort: "asc" } });
+        const cats = await Category.findMany({ sort: 'sort' });
         setCategories(cats as CategoryRecord[]);
       } catch (e) {
         console.error("Failed to load categories:", e);

@@ -3,7 +3,7 @@
  * SQLite 模块快捷函数
  */
 
-import type { SQLiteBridge, SQLiteDatabaseConfig, SQLiteModelConfig, SQLiteModelData } from './types';
+import type { SQLiteBridge, SQLiteDatabaseConfig, SQLiteModelConfig, SQLiteModelData, SQLiteStorageConfig } from './types';
 import { SQLiteStorage, createSQLiteStorage, getGlobalSQLiteStorage, setGlobalSQLiteStorage, clearGlobalSQLiteStorage } from './storage';
 import { SQLiteModel, createSQLiteModel } from './model';
 import { SQLiteDatabaseManager, createSQLiteDB, getSQLiteDB, removeSQLiteDB } from './database';
@@ -36,9 +36,13 @@ export function getGlobalBridge(): SQLiteBridge {
  * @param bridge Tauri 桥接对象
  * @param config 配置选项
  */
-export function initSQLite(bridge: SQLiteBridge, config?: { dbName?: string; debug?: boolean }): SQLiteStorage {
+export function initSQLite(
+  bridge: SQLiteBridge,
+  config?: { dbName?: string; mode?: 'eav' | 'table'; debug?: boolean }
+): SQLiteStorage {
   const storage = createSQLiteStorage(bridge, {
     dbName: config?.dbName,
+    mode: config?.mode,
     debug: config?.debug,
   });
   setGlobalBridge(bridge);
@@ -50,10 +54,11 @@ export function initSQLite(bridge: SQLiteBridge, config?: { dbName?: string; deb
  * 获取 SQLite 存储实例
  * @param config 配置选项
  */
-export function getSQLite(config?: { dbName?: string; debug?: boolean }): SQLiteStorage {
+export function getSQLite(config?: { dbName?: string; mode?: 'eav' | 'table'; debug?: boolean }): SQLiteStorage {
   const bridge = getGlobalBridge();
   return getGlobalSQLiteStorage(bridge, {
     dbName: config?.dbName,
+    mode: config?.mode,
     debug: config?.debug,
   });
 }

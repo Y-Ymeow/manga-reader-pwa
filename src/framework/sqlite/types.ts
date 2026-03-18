@@ -1,6 +1,6 @@
 /**
  * SQLite Types
- * SQLite EAV 存储模块的类型定义
+ * SQLite 存储模块的类型定义（支持 EAV 和原生表模式）
  */
 
 /**
@@ -12,6 +12,11 @@ export interface SQLiteBridge {
    */
   invoke<T = unknown>(cmd: string, payload?: Record<string, unknown>): Promise<SQLiteResult<T>>;
 }
+
+/**
+ * 存储模式
+ */
+export type StorageMode = 'eav' | 'table';
 
 /**
  * SQLite 命令执行结果
@@ -45,14 +50,34 @@ export interface EAVRecord<T = Record<string, unknown>> {
 export interface SQLiteQueryOptions {
   /** 过滤条件 */
   filter?: Record<string, unknown>;
-  /** 排序字段 */
+  /** 排序字段（旧版兼容） */
   orderBy?: string;
-  /** 是否降序 */
+  /** 是否降序（旧版兼容） */
   desc?: boolean;
   /** 限制数量 */
   limit?: number;
   /** 偏移量 */
   offset?: number;
+  /** 排序配置（新版，支持单字段、多字段、嵌套数据排序） */
+  sort?: string | { field: string; order?: 'asc' | 'desc' } | Array<{ field: string; order?: 'asc' | 'desc' }>;
+}
+
+/**
+ * 查询选项（通用）
+ */
+export interface QueryOptions {
+  /** 过滤条件 */
+  filter?: Record<string, unknown>;
+  /** 排序字段（旧版兼容） */
+  orderBy?: string;
+  /** 是否降序（旧版兼容） */
+  desc?: boolean;
+  /** 限制数量 */
+  limit?: number;
+  /** 偏移量 */
+  offset?: number;
+  /** 排序配置（新版，支持单字段、多字段、嵌套数据排序） */
+  sort?: string | { field: string; order?: 'asc' | 'desc' } | Array<{ field: string; order?: 'asc' | 'desc' }>;
 }
 
 /**
@@ -63,6 +88,8 @@ export interface SQLiteStorageConfig {
   appId?: string;
   /** 数据库名称 */
   dbName?: string;
+  /** 存储模式（'eav' | 'table'） */
+  mode?: StorageMode;
   /** 调试模式 */
   debug?: boolean;
 }
@@ -263,4 +290,30 @@ export interface SQLiteDatabaseConfig {
   name?: string;
   /** 调试模式 */
   debug?: boolean;
+}
+
+/**
+ * 表结构定义
+ */
+export interface TableSchema {
+  /** 列定义 */
+  columns: string;
+  /** 索引 */
+  indexes?: string[];
+}
+
+/**
+ * 表查询选项
+ */
+export interface TableQueryOptions {
+  /** WHERE 子句 */
+  where?: string;
+  /** 参数 */
+  params?: unknown[];
+  /** 排序 */
+  orderBy?: string;
+  /** 限制数量 */
+  limit?: number;
+  /** 偏移量 */
+  offset?: number;
 }

@@ -124,8 +124,10 @@ export interface SortOptions {
 export interface QueryOptions {
   /** 过滤条件 */
   where?: FilterCondition;
-  /** 排序 */
+  /** 排序（旧版兼容） */
   orderBy?: SortOptions;
+  /** 排序（新版，支持单字段、多字段排序） */
+  sort?: string | { field: string; order?: 'asc' | 'desc' } | Array<{ field: string; order?: 'asc' | 'desc' }>;
   /** 偏移量 */
   offset?: number;
   /** 限制数量 */

@@ -122,13 +122,36 @@ class ComicSourceClass {
   }
 }
 
-// UI 对象
+// UI 对象 - 使用插件 UI 组件
 const UI = {
   showMessage: (message: string) => {
-    alert(message);
+    // 使用插件 UI 组件
+    if ((globalThis as any).__PLUGIN_UI_SEND_MESSAGE__) {
+      (globalThis as any).__PLUGIN_UI_SEND_MESSAGE__({
+        method: 'UI',
+        function: 'showMessage',
+        message,
+      });
+    } else {
+      // Fallback: 使用 PluginUI
+      import('../components/plugin-ui').then(({ PluginUI }) => {
+        PluginUI.showMessage(message);
+      });
+    }
   },
 
   showDialog: async (title: string, content: string, actions: any[]) => {
+    if ((globalThis as any).__PLUGIN_UI_SEND_MESSAGE__) {
+      return (globalThis as any).__PLUGIN_UI_SEND_MESSAGE__({
+        method: 'UI',
+        function: 'showDialog',
+        title,
+        content,
+        actions,
+      });
+    }
+    
+    // Fallback
     const confirmed = confirm(`${title}\n\n${content}`);
     if (confirmed && actions && actions[0]?.callback) {
       await actions[0].callback();
@@ -140,13 +163,38 @@ const UI = {
   },
 
   showLoading: (onCancel?: (() => void) | null) => {
+    if ((globalThis as any).__PLUGIN_UI_SEND_MESSAGE__) {
+      return (globalThis as any).__PLUGIN_UI_SEND_MESSAGE__({
+        method: 'UI',
+        function: 'showLoading',
+        onCancel,
+      });
+    }
     return Date.now();
   },
 
   cancelLoading: (id: number) => {
+    if ((globalThis as any).__PLUGIN_UI_SEND_MESSAGE__) {
+      (globalThis as any).__PLUGIN_UI_SEND_MESSAGE__({
+        method: 'UI',
+        function: 'cancelLoading',
+        id,
+      });
+    }
   },
 
   showInputDialog: async (title: string, validator?: (value: string) => string | null | undefined, image?: string | ArrayBuffer | null): Promise<string | null> => {
+    if ((globalThis as any).__PLUGIN_UI_SEND_MESSAGE__) {
+      return (globalThis as any).__PLUGIN_UI_SEND_MESSAGE__({
+        method: 'UI',
+        function: 'showInputDialog',
+        title,
+        validator,
+        image,
+      });
+    }
+    
+    // Fallback
     const value = prompt(title);
     if (value === null) return null;
     if (validator) {
@@ -160,6 +208,17 @@ const UI = {
   },
 
   showSelectDialog: async (title: string, options: string[], initialIndex?: number): Promise<number | null> => {
+    if ((globalThis as any).__PLUGIN_UI_SEND_MESSAGE__) {
+      return (globalThis as any).__PLUGIN_UI_SEND_MESSAGE__({
+        method: 'UI',
+        function: 'showSelectDialog',
+        title,
+        options,
+        initialIndex,
+      });
+    }
+    
+    // Fallback
     const optionList = options.map((opt, i) => `${i + 1}. ${opt}`).join('\n');
     const input = prompt(`${title}\n\n${optionList}\n\n请输入序号:`);
     if (input === null) return null;

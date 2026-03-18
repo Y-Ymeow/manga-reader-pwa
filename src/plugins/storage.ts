@@ -1,76 +1,22 @@
 /**
  * 插件存储管理
- * Tauri 环境：使用 SQLite EAV（通过 localStorage 或直接调用）
+ * Tauri 环境：使用 window.tauri.eav
  * 浏览器环境：使用 IndexedDB
  */
 
 import { isTauri } from '../db/adapter';
 import { waitForDatabase } from '../db/global';
 
-// ==================== Tauri SQLite EAV 存储 ====================
+// ==================== Tauri EAV 存储 ====================
 
-// Tauri 环境下使用 EAV 存储
-function getSQLiteEAV() {
+// Tauri 环境下使用 window.tauri.eav
+function getTauriEAV() {
   if (!isTauri()) return null;
-  const win = window as unknown as { __TAURI__?: { invoke: Function; _ready: boolean }; tauri?: { invoke: Function; _ready: boolean } };
-  const tauri = win.__TAURI__ || win.tauri;
-  if (!tauri?._ready) return null;
-  
-  return {
-    async upsert(table: string, dataId: string, data: any): Promise<boolean> {
-      const result = await tauri.invoke('sqlite_upsert', {
-        dbName: 'manga-reader',
-        tableName: table,
-        dataId,
-        data,
-      });
-      return result.success ? result.data : false;
-    },
-    async findOne(table: string, dataId: string): Promise<any> {
-      const result = await tauri.invoke('sqlite_find_one', {
-        dbName: 'manga-reader',
-        tableName: table,
-        dataId,
-      });
-      const rawData = result.success ? result.data : null;
-      // Rust 返回的数据可能是嵌套结构，需要解包并转换字段名
-      if (!rawData) return null;
-      return {
-        dataId: rawData.data_id,
-        createdAt: rawData.created_at,
-        updatedAt: rawData.updated_at,
-        data: rawData.data,
-      };
-    },
-    async find(table: string, options?: { filter?: Record<string, any> }): Promise<any[]> {
-      const result = await tauri.invoke('sqlite_find', {
-        dbName: 'manga-reader',
-        tableName: table,
-        filter: options?.filter || null,
-        options: { order_by: null, desc: false, limit: null, offset: null },
-      });
-      const rawData = result.success ? result.data : [];
-      // Rust 返回的数据可能是嵌套结构，需要解包并转换字段名
-      let records: any[] = [];
-      if (rawData && Array.isArray(rawData)) {
-        records = rawData.map((item: any) => ({
-          dataId: item.data_id,
-          createdAt: item.created_at,
-          updatedAt: item.updated_at,
-          data: item.data,
-        }));
-      }
-      return records;
-    },
-    async delete(table: string, dataId: string): Promise<boolean> {
-      const result = await tauri.invoke('sqlite_delete', {
-        dbName: 'manga-reader',
-        tableName: table,
-        dataId,
-      });
-      return result.success ? result.data : false;
-    },
+  const win = window as unknown as { 
+    __TAURI__?: { eav?: any }; 
+    tauri?: { eav?: any } 
   };
+  return win.__TAURI__?.eav || win.tauri?.eav || null;
 }
 
 // ==================== IndexedDB 实现 ====================
@@ -88,13 +34,13 @@ async function getDB(): Promise<IDBDatabase> {
 
 export async function savePluginCode(key: string, code: string): Promise<void> {
   if (isTauri()) {
-    const eav = getSQLiteEAV();
+    const eav = getTauriEAV();
     if (eav) {
       await eav.upsert('plugin_codes', key, { code });
       return;
     }
   }
-  
+
   const db = await getDB();
   const now = Date.now();
   return new Promise<void>((resolve, reject) => {
@@ -113,11 +59,10 @@ export async function savePluginCode(key: string, code: string): Promise<void> {
 
 export async function loadPluginCode(key: string): Promise<string | null> {
   if (isTauri()) {
-    const eav = getSQLiteEAV();
+    const eav = getTauriEAV();
     if (eav) {
       try {
         const record = await eav.findOne('plugin_codes', key);
-        // record 格式：{ dataId, createdAt, updatedAt, data: { code: '...' } }
         return record?.data?.code ?? null;
       } catch (e) {
         console.error('[loadPluginCode] Tauri error:', e);
@@ -138,13 +83,13 @@ export async function loadPluginCode(key: string): Promise<string | null> {
 
 export async function deletePluginCode(key: string): Promise<void> {
   if (isTauri()) {
-    const eav = getSQLiteEAV();
+    const eav = getTauriEAV();
     if (eav) {
       await eav.delete('plugin_codes', key);
       return;
     }
   }
-  
+
   const db = await getDB();
   return new Promise<void>((resolve, reject) => {
     const tx = db.transaction('plugin_codes', 'readwrite');
@@ -157,11 +102,10 @@ export async function deletePluginCode(key: string): Promise<void> {
 
 export async function listStoredPlugins(): Promise<string[]> {
   if (isTauri()) {
-    const eav = getSQLiteEAV();
+    const eav = getTauriEAV();
     if (eav) {
       const records = await eav.find('plugin_codes');
-      // records 格式：[{ dataId, createdAt, updatedAt, data }, ...]
-      return records.map(r => r.dataId).filter(Boolean);
+      return records.map((r: any) => r.dataId).filter(Boolean);
     }
     return [];
   }
@@ -182,7 +126,7 @@ const DEFAULT_CACHE_TTL = 60 * 60 * 1000; // 1 小时
 
 export async function saveMangaCache(pluginKey: string, comicId: string, data: any, ttl: number = DEFAULT_CACHE_TTL): Promise<void> {
   if (isTauri()) {
-    const eav = getSQLiteEAV();
+    const eav = getTauriEAV();
     if (eav) {
       const key = `${pluginKey}:${comicId}`;
       const now = Date.now();
@@ -210,7 +154,7 @@ export async function saveMangaCache(pluginKey: string, comicId: string, data: a
 
 export async function loadMangaCache(pluginKey: string, comicId: string): Promise<any | null> {
   if (isTauri()) {
-    const eav = getSQLiteEAV();
+    const eav = getTauriEAV();
     if (eav) {
       const key = `${pluginKey}:${comicId}`;
       const record = await eav.findOne('manga_cache', key);
@@ -241,7 +185,7 @@ export async function loadMangaCache(pluginKey: string, comicId: string): Promis
 
 export async function deleteMangaCache(pluginKey: string, comicId: string): Promise<void> {
   if (isTauri()) {
-    const eav = getSQLiteEAV();
+    const eav = getTauriEAV();
     if (eav) {
       await eav.delete('manga_cache', `${pluginKey}:${comicId}`);
       return;
@@ -265,7 +209,7 @@ export async function deleteMangaCacheWithSuffix(pluginKey: string, comicId: str
 
 export async function clearPluginMangaCache(pluginKey: string): Promise<void> {
   if (isTauri()) {
-    const eav = getSQLiteEAV();
+    const eav = getTauriEAV();
     if (eav) {
       const records = await eav.find('manga_cache');
       for (const record of records) {
@@ -297,10 +241,10 @@ export async function clearPluginMangaCache(pluginKey: string): Promise<void> {
 
 export async function listPluginCacheKeys(pluginKey: string): Promise<string[]> {
   if (isTauri()) {
-    const eav = getSQLiteEAV();
+    const eav = getTauriEAV();
     if (eav) {
       const records = await eav.find('manga_cache');
-      return records.filter(r => r.dataId.startsWith(`${pluginKey}:`)).map(r => r.dataId);
+      return records.filter((r: any) => r.dataId.startsWith(`${pluginKey}:`)).map((r: any) => r.dataId);
     }
     return [];
   }
@@ -324,7 +268,7 @@ const SETTING_KEY_PREFIX = 'plugin_setting_';
 
 export async function savePluginSetting(pluginKey: string, settingKey: string, value: any): Promise<void> {
   if (isTauri()) {
-    const eav = getSQLiteEAV();
+    const eav = getTauriEAV();
     if (eav) {
       const key = `${SETTING_KEY_PREFIX}${pluginKey}_${settingKey}`;
       const existing = await eav.findOne('plugin_settings', key);
@@ -350,7 +294,7 @@ export async function savePluginSetting(pluginKey: string, settingKey: string, v
 
 export async function loadPluginSetting(pluginKey: string, settingKey: string): Promise<any | null> {
   if (isTauri()) {
-    const eav = getSQLiteEAV();
+    const eav = getTauriEAV();
     if (eav) {
       const key = `${SETTING_KEY_PREFIX}${pluginKey}_${settingKey}`;
       const record = await eav.findOne('plugin_settings', key);
@@ -374,7 +318,7 @@ export async function loadPluginSetting(pluginKey: string, settingKey: string): 
 
 export async function deletePluginSetting(pluginKey: string, settingKey: string): Promise<void> {
   if (isTauri()) {
-    const eav = getSQLiteEAV();
+    const eav = getTauriEAV();
     if (eav) {
       await eav.delete('plugin_settings', `${SETTING_KEY_PREFIX}${pluginKey}_${settingKey}`);
       return;
@@ -398,7 +342,7 @@ const PLUGIN_DATA_KEY_PREFIX = 'plugin_data_';
 
 export async function savePluginData(pluginKey: string, dataKey: string, value: any): Promise<void> {
   if (isTauri()) {
-    const eav = getSQLiteEAV();
+    const eav = getTauriEAV();
     if (eav) {
       const key = `${PLUGIN_DATA_KEY_PREFIX}${pluginKey}`;
       const existing = await eav.findOne('plugin_settings', key);
@@ -428,7 +372,7 @@ export async function savePluginData(pluginKey: string, dataKey: string, value: 
 
 export async function loadPluginData(pluginKey: string, dataKey: string): Promise<any | null> {
   if (isTauri()) {
-    const eav = getSQLiteEAV();
+    const eav = getTauriEAV();
     if (eav) {
       const key = `${PLUGIN_DATA_KEY_PREFIX}${pluginKey}`;
       const record = await eav.findOne('plugin_settings', key);
@@ -459,7 +403,7 @@ export async function loadPluginData(pluginKey: string, dataKey: string): Promis
 
 export async function loadAllPluginData(pluginKey: string): Promise<Record<string, any>> {
   if (isTauri()) {
-    const eav = getSQLiteEAV();
+    const eav = getTauriEAV();
     if (eav) {
       const key = `${PLUGIN_DATA_KEY_PREFIX}${pluginKey}`;
       const record = await eav.findOne('plugin_settings', key);
@@ -484,7 +428,7 @@ export async function loadAllPluginData(pluginKey: string): Promise<Record<strin
 
 export async function deletePluginData(pluginKey: string, dataKey: string): Promise<void> {
   if (isTauri()) {
-    const eav = getSQLiteEAV();
+    const eav = getTauriEAV();
     if (eav) {
       const key = `${PLUGIN_DATA_KEY_PREFIX}${pluginKey}`;
       const existing = await eav.findOne('plugin_settings', key);
@@ -519,7 +463,7 @@ export async function listPluginDataKeys(pluginKey: string): Promise<string[]> {
 
 export async function clearPluginData(pluginKey: string): Promise<number> {
   if (isTauri()) {
-    const eav = getSQLiteEAV();
+    const eav = getTauriEAV();
     if (eav) {
       const key = `${PLUGIN_DATA_KEY_PREFIX}${pluginKey}`;
       const record = await eav.findOne('plugin_settings', key);

@@ -28,10 +28,10 @@ export function History() {
     setLoading(true);
     try {
       await waitForDatabase();
-      
+
       // 加载阅读历史
       const historyRecords = await ReadHistory.findMany({
-        orderBy: { readAt: 'desc' },
+        sort: { field: 'readAt', order: 'desc' },
         limit: 100,
       });
 

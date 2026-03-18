@@ -1,13 +1,15 @@
 import { Router } from './routes';
 import { CfChallengeModal, useCfChallenge } from './components/CfChallengeModal';
+import { PluginUIComponents } from './components/plugin-ui/provider';
 
 function AppContent() {
   const [challengeUrl, closeChallenge] = useCfChallenge();
-  
+
   return (
     <>
       <Router />
       <CfChallengeModal challengeUrl={challengeUrl} onClose={closeChallenge} />
+      <PluginUIComponents />
     </>
   );
 }

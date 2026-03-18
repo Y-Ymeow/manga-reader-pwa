@@ -5,6 +5,7 @@
 import { useState, useEffect, useCallback } from 'preact/hooks';
 import type { MangaRecord, ChapterListRecord, ReadHistoryRecord } from './index';
 import { Manga, ChapterList, ReadHistory } from './index';
+import { waitForDatabase } from './global';
 
 /**
  * 获取漫画列表
@@ -21,6 +22,9 @@ export function useMangaList(options?: {
     const load = async () => {
       setLoading(true);
       try {
+        // 确保数据库已初始化
+        await waitForDatabase();
+        
         const where: any = {};
         if (options?.isFavorite !== undefined) {
           where.isFavorite = options.isFavorite;
@@ -31,7 +35,7 @@ export function useMangaList(options?: {
 
         const result = await Manga.findMany({
           where,
-          orderBy: { updatedAt: 'desc' },
+          sort: { field: 'updatedAt', order: 'desc' },
           limit: options?.limit,
         });
         setMangas(result);
@@ -119,8 +123,11 @@ export function useReadHistory(limit?: number) {
   const load = useCallback(async () => {
     setLoading(true);
     try {
+      // 确保数据库已初始化
+      await waitForDatabase();
+      
       const result = await ReadHistory.findMany({
-        orderBy: { updatedAt: 'desc' },
+        sort: { field: 'updatedAt', order: 'desc' },
         limit,
       });
       setHistory(result as ReadHistoryRecord[]);

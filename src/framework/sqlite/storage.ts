@@ -1,52 +1,129 @@
 /**
  * SQLite Storage
- * 使用 SQLite EAV 模型的存储实现
+ * SQLite 存储实现（支持 EAV 和 Table 双模式）
  *
- * 注意：pwaId 由 Tauri 侧 App.tsx 通过 postMessage 自动注入，PWA 侧不需要自己获取
+ * 直接使用 window.tauri.sql 和 window.tauri.eav 接口
+ *
+ * @example
+ * ```typescript
+ * // EAV 模式（适合结构不固定的数据）
+ * const storage = createSQLiteStorage(bridge, { dbName: 'my-app', mode: 'eav' });
+ * await storage.upsert('users', 'user1', { name: '张三', age: 25 });
+ * const user = await storage.findOne('users', 'user1');
+ *
+ * // Table 模式（适合结构固定的数据，性能更好）
+ * const storage = createSQLiteStorage(bridge, { dbName: 'my-app', mode: 'table' });
+ * await storage.createTable('users', `
+ *   id INTEGER PRIMARY KEY AUTOINCREMENT,
+ *   name TEXT NOT NULL,
+ *   age INTEGER
+ * `);
+ * await storage.tableInsert('users', { name: '张三', age: 25 });
+ * ```
  */
 
 import type {
   SQLiteBridge,
-  SQLiteResult,
   EAVRecord,
   SQLiteQueryOptions,
   SQLiteStorageConfig,
   ISQLiteStorage,
+  StorageMode,
 } from "./types";
 
 /**
- * 获取应用 ID（占位值，实际由 Tauri 侧注入）
+ * 从 URL 获取 pwaId
  */
-function getAppId(): string {
-  return "pwa-app";
+function getPwaIdFromUrl(): string {
+  try {
+    const urlParams = new URLSearchParams(window.location.search);
+    return urlParams.get('__pwa_id') || 'default';
+  } catch {
+    return 'default';
+  }
 }
 
 /**
- * SQLite EAV 存储实现
+ * 获取 Tauri SQL 接口
+ */
+function getTauriSQL() {
+  if (typeof window !== 'undefined') {
+    if ((window.tauri as any) && (window.tauri as any).sql) {
+      return (window.tauri as any).sql;
+    }
+    if ((window.__TAURI__ as any) && (window.__TAURI__ as any).sql) {
+      return (window.__TAURI__ as any).sql;
+    }
+  }
+  return null;
+}
+
+/**
+ * 获取 Tauri EAV 接口
+ */
+function getTauriEAV(dbName?: string) {
+  if (typeof window !== 'undefined') {
+    if ((window.tauri as any) && (window.tauri as any).eav) {
+      return (window.tauri as any).eav;
+    }
+    if ((window.__TAURI__ as any) && (window.__TAURI__ as any).eav) {
+      return (window.__TAURI__ as any).eav;
+    }
+  }
+  return null;
+}
+
+/**
+ * 等待 Tauri SQL 就绪
+ */
+async function waitForTauriSQL(timeout = 5000): Promise<any> {
+  const startTime = Date.now();
+  
+  while (Date.now() - startTime < timeout) {
+    const sql = getTauriSQL();
+    if (sql) {
+      return sql;
+    }
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  
+  throw new Error('Tauri SQL not available within timeout');
+}
+
+/**
+ * SQLite 存储实现（支持 EAV 和 Table 双模式）
  */
 export class SQLiteStorage implements ISQLiteStorage {
   readonly appId: string;
   readonly dbName: string;
+  readonly mode: StorageMode;
 
-  private bridge: SQLiteBridge;
+  private pwaId: string;
   private debug: boolean;
   private initialized = false;
+  private sql: any = null;
+  private eav: any = null;
 
   /**
    * 创建 SQLite 存储实例
-   * @param bridge Tauri 桥接对象
+   * @param bridge Tauri 桥接对象（用于兼容）
    * @param appId 应用 ID（可选，默认从 URL 提取）
    * @param dbName 数据库名称
+   * @param mode 存储模式（'eav' | 'table'）
    */
   constructor(
     bridge: SQLiteBridge,
     appId?: string,
     dbName: string = "default",
+    mode: StorageMode = 'eav',
   ) {
-    this.bridge = bridge;
-    this.appId = appId || getAppId();
+    this.pwaId = appId || getPwaIdFromUrl();
+    this.appId = this.pwaId;
     this.dbName = dbName;
+    this.mode = mode;
     this.debug = false;
+    this.sql = getTauriSQL();
+    this.eav = getTauriEAV(dbName);
   }
 
   /**
@@ -54,8 +131,14 @@ export class SQLiteStorage implements ISQLiteStorage {
    */
   async init(): Promise<void> {
     if (this.initialized) return;
+    
+    // 等待 Tauri SQL 就绪
+    if (!this.sql) {
+      this.sql = await waitForTauriSQL();
+    }
+    
     this.initialized = true;
-    this.log("SQLiteStorage initialized");
+    this.log("SQLiteStorage initialized (mode:", this.mode + ")");
   }
 
   /**
@@ -66,64 +149,37 @@ export class SQLiteStorage implements ISQLiteStorage {
   }
 
   /**
-   * 日志输出
+   * 确保初始化
    */
-  private log(...args: unknown[]): void {
-    if (this.debug) {
-      // console.log('[SQLiteStorage]', ...args);
+  private async ensureInit(): Promise<void> {
+    if (!this.initialized) {
+      await this.init();
     }
   }
 
   /**
-   * 调用桥接命令
+   * 日志输出
    */
-  private async invoke<T = unknown>(
-    cmd: string,
-    payload: Record<string, unknown>,
-  ): Promise<SQLiteResult<T>> {
-    try {
-      // 转换参数为 Rust 侧期望的格式
-      const rustPayload: Record<string, unknown> = {
-        pwaId: this.appId,
-        dbName: this.dbName,
-      };
-
-      for (const [key, value] of Object.entries(payload)) {
-        if (key === "options" && value && typeof value === "object") {
-          // 转换 options 内部的字段名
-          const opts = value as Record<string, unknown>;
-          const convertedOpts: Record<string, unknown> = {};
-          for (const [optKey, optValue] of Object.entries(opts)) {
-            // order_by 已经是正确的
-            convertedOpts[optKey] = optValue;
-          }
-          rustPayload[key] = convertedOpts;
-        } else if (key === "filter" && value && typeof value === "object") {
-          // 转换过滤条件：sourceType.$eq -> sourceType
-          const filter = value as Record<string, unknown>;
-          const convertedFilter: Record<string, unknown> = {};
-          for (const [filterKey, filterValue] of Object.entries(filter)) {
-            // 处理操作符格式：{ 'sourceType.$eq': 'local' } -> { 'sourceType': 'local' }
-            const cleanKey = filterKey.replace(/\.\$.*/, "");
-            convertedFilter[cleanKey] = filterValue;
-          }
-          rustPayload[key] = convertedFilter;
-        } else {
-          rustPayload[key] = value;
-        }
-      }
-
-      const result = await this.bridge.invoke<T>(cmd, rustPayload);
-      this.log(`Invoke ${cmd}:`, result);
-      return result;
-    } catch (error) {
-      console.error("[SQLiteStorage] Invoke error:", cmd, error);
-      this.log(`Invoke ${cmd} error:`, error);
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : String(error),
-      };
+  private log(...args: unknown[]): void {
+    if (this.debug) {
+      console.log('[SQLiteStorage]', ...args);
     }
+  }
+
+  /**
+   * 执行 SQL（使用 window.tauri.sql）
+   */
+  private async executeSQL<T = unknown>(sql: string, params: unknown[] = []): Promise<T> {
+    // 等待 Tauri SQL 就绪
+    if (!this.sql) {
+      this.sql = await waitForTauriSQL();
+    }
+
+    // 使用 Tauri SQL 接口
+    if (params && params.length > 0) {
+      return await this.sql.execute(sql, params);
+    }
+    return await this.sql.execute(sql);
   }
 
   /**
@@ -138,41 +194,48 @@ export class SQLiteStorage implements ISQLiteStorage {
     dataId: string,
     data: T,
   ): Promise<boolean> {
-    // 过滤掉不可序列化的字段（fileHandle, Blob 等）
-    const serializableData: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(data)) {
-      if (value === undefined) {
-        continue; // 跳过 undefined
-      }
-      if (value === null) {
-        serializableData[key] = null;
-      } else if (
-        typeof value === "string" ||
-        typeof value === "number" ||
-        typeof value === "boolean"
-      ) {
-        serializableData[key] = value;
-      } else if (typeof value === "object") {
-        // 检查是否可序列化
-        try {
-          JSON.stringify(value);
-          serializableData[key] = value;
-        } catch {
-          // 不可序列化的对象（如 FileHandle, Blob），跳过并警告
-          console.warn(
-            `[SQLiteStorage] Skipping non-serializable field: ${key}`,
-            value?.constructor?.name,
-          );
-        }
-      }
+    await this.ensureInit();
+
+    // EAV 模式直接使用 window.tauri.eav
+    if (this.mode === 'eav' && this.eav) {
+      return await this.eav.upsert(table, dataId, data);
     }
 
-    const result = await this.invoke<boolean>("sqlite_upsert", {
-      tableName: table,
-      dataId: String(dataId),
-      data: serializableData,
-    });
-    return result.success ? (result.data ?? false) : false;
+    // Table 模式
+    return this.tableUpsert(table, dataId, data);
+  }
+
+  /**
+   * Table 模式下的 upsert
+   */
+  private async tableUpsert<T extends Record<string, unknown>>(
+    table: string,
+    dataId: string,
+    data: T
+  ): Promise<boolean> {
+    const serializableData: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(data)) {
+      if (value === undefined) continue;
+      serializableData[key] = value;
+    }
+
+    const columns = Object.keys(serializableData);
+    const placeholders = columns.map(() => '?').join(', ');
+    const values = columns.map((col) => serializableData[col]);
+
+    // 尝试更新
+    const updateSql = `UPDATE ${table} SET ${columns.map((c) => `${c} = ?`).join(', ')} WHERE id = ?`;
+    const updateResult = await this.executeSQL<{ changes: number }>(updateSql, [...values, dataId]);
+
+    if (updateResult && (updateResult as any).changes === 0) {
+      // 没有更新任何行，说明记录不存在，执行插入
+      const insertColumns = ['id', ...columns];
+      const insertValues = [dataId, ...values];
+      const insertSql = `INSERT INTO ${table} (${insertColumns.join(', ')}) VALUES (${insertColumns.map(() => '?').join(', ')})`;
+      await this.executeSQL(insertSql, insertValues);
+    }
+
+    return true;
   }
 
   /**
@@ -185,68 +248,60 @@ export class SQLiteStorage implements ISQLiteStorage {
     table: string,
     options: SQLiteQueryOptions = {},
   ): Promise<EAVRecord<T>[]> {
-    // 转换排序字段名：createdAt -> created_at
-    let orderBy = options.orderBy;
-    const originalOrderBy = options.orderBy; // 保存原始字段名用于前端排序
-    if (orderBy) {
-      orderBy = orderBy.replace(/([A-Z])/g, "_$1").toLowerCase();
+    await this.ensureInit();
+
+    // EAV 模式直接使用 window.tauri.eav
+    if (this.mode === 'eav' && this.eav) {
+      return await this.eav.find(table, options);
     }
 
-    const result = await this.invoke<any[]>("sqlite_find", {
-      tableName: table,
-      filter: options.filter || null,
-      options: {
-        order_by: null, // 不在 SQL 中排序，在前端处理
-        desc: options.desc || false,
-        limit: options.limit || null,
-        offset: options.offset || null,
-      },
-    });
+    // Table 模式
+    return this.tableFind(table, options);
+  }
 
-    // Rust 侧返回的数据可能是嵌套结构，需要解包
-    let rawData: any[] = [];
-    if (result.success && result.data) {
-      const data = result.data as any;
-      // 如果 data 本身是 {success, data, error} 结构，解包它
-      if (typeof data === 'object' && data !== null && 'success' in data) {
-        const innerData = data as { success: boolean; data?: any[] };
-        rawData = innerData.success ? (innerData.data ?? []) : [];
-      } else {
-        rawData = Array.isArray(data) ? data : [];
+  /**
+   * Table 模式下的 find
+   */
+  private async tableFind<T extends Record<string, unknown>>(
+    table: string,
+    options: SQLiteQueryOptions = {}
+  ): Promise<EAVRecord<T>[]> {
+    let sql = `SELECT * FROM ${table}`;
+    const params: unknown[] = [];
+
+    if (options.filter && Object.keys(options.filter).length > 0) {
+      const conditions: string[] = [];
+      for (const [key, value] of Object.entries(options.filter)) {
+        const cleanKey = key.split('.')[0];
+        conditions.push(`${cleanKey} = ?`);
+        params.push(value);
       }
+      sql += ` WHERE ${conditions.join(' AND ')}`;
     }
 
-    // 转换字段名：snake_case -> camelCase
-    let records = rawData.map((item: any) => ({
-      dataId: item.data_id,
-      createdAt: item.created_at,
-      updatedAt: item.updated_at,
-      data: item.data,
-    }));
-
-    // 在前端进行排序（因为 EAV 模型的字段在 data 中）
-    if (originalOrderBy) {
-      records.sort((a, b) => {
-        const aVal = (a.data as any)[originalOrderBy];
-        const bVal = (b.data as any)[originalOrderBy];
-        if (aVal === undefined && bVal === undefined) return 0;
-        if (aVal === undefined) return 1;
-        if (bVal === undefined) return -1;
-        if (aVal < bVal) return options.desc ? 1 : -1;
-        if (aVal > bVal) return options.desc ? -1 : 1;
-        return 0;
-      });
+    if (options.orderBy) {
+      const orderByColumn = options.orderBy.replace(/([A-Z])/g, '_$1').toLowerCase();
+      sql += ` ORDER BY ${orderByColumn} ${options.desc ? 'DESC' : 'ASC'}`;
     }
 
-    // 应用 limit 和 offset
-    if (options.offset) {
-      records = records.slice(options.offset);
-    }
     if (options.limit) {
-      records = records.slice(0, options.limit);
+      sql += ` LIMIT ?`;
+      params.push(options.limit);
     }
 
-    return records;
+    if (options.offset) {
+      sql += ` OFFSET ?`;
+      params.push(options.offset);
+    }
+
+    const rows = await this.executeSQL<T[]>(sql, params);
+
+    return rows.map((row) => ({
+      dataId: (row as any).id || String(Math.random()),
+      createdAt: (row as any).created_at || (row as any).createdAt || Date.now(),
+      updatedAt: (row as any).updated_at || (row as any).updatedAt || Date.now(),
+      data: row,
+    }));
   }
 
   /**
@@ -259,32 +314,32 @@ export class SQLiteStorage implements ISQLiteStorage {
     table: string,
     dataId: string,
   ): Promise<EAVRecord<T> | null> {
-    const result = await this.invoke<any>("sqlite_find_one", {
-      tableName: table,
-      dataId: String(dataId),
-    });
-    
-    // Rust 侧返回的数据可能是嵌套结构，需要解包
-    let rawData: any = null;
-    if (result.success && result.data) {
-      const data = result.data as any;
-      // 如果 data 本身是 {success, data, error} 结构，解包它
-      if (typeof data === 'object' && data !== null && 'success' in data) {
-        const innerData = data as { success: boolean; data?: any };
-        rawData = innerData.success ? (innerData.data ?? null) : null;
-      } else {
-        rawData = data;
-      }
+    await this.ensureInit();
+
+    // EAV 模式直接使用 window.tauri.eav
+    if (this.mode === 'eav' && this.eav) {
+      return await this.eav.findOne(table, dataId);
     }
-    
-    if (!rawData) return null;
-    
-    // 转换字段名：snake_case -> camelCase
+
+    // Table 模式
+    return this.tableFindOne(table, dataId);
+  }
+
+  /**
+   * Table 模式下的 findOne
+   */
+  private async tableFindOne<T extends Record<string, unknown>>(
+    table: string,
+    dataId: string
+  ): Promise<EAVRecord<T> | null> {
+    const row = await this.executeSQL<T>(`SELECT * FROM ${table} WHERE id = ?`, [dataId]);
+    if (!row) return null;
+
     return {
-      dataId: rawData.data_id,
-      createdAt: rawData.created_at,
-      updatedAt: rawData.updated_at,
-      data: rawData.data,
+      dataId: (row as any).id || dataId,
+      createdAt: (row as any).created_at || (row as any).createdAt || Date.now(),
+      updatedAt: (row as any).updated_at || (row as any).updatedAt || Date.now(),
+      data: row,
     };
   }
 
@@ -295,11 +350,16 @@ export class SQLiteStorage implements ISQLiteStorage {
    * @returns 是否成功
    */
   async delete(table: string, dataId: string): Promise<boolean> {
-    const result = await this.invoke<boolean>("sqlite_delete", {
-      tableName: table,
-      dataId: String(dataId),
-    });
-    return result.success ? (result.data ?? false) : false;
+    await this.ensureInit();
+
+    // EAV 模式直接使用 window.tauri.eav
+    if (this.mode === 'eav' && this.eav) {
+      return await this.eav.delete(table, dataId);
+    }
+
+    // Table 模式
+    await this.executeSQL(`DELETE FROM ${table} WHERE id = ?`, [dataId]);
+    return true;
   }
 
   /**
@@ -312,11 +372,27 @@ export class SQLiteStorage implements ISQLiteStorage {
     table: string,
     filter?: Record<string, unknown>,
   ): Promise<number> {
-    const result = await this.invoke<number>("sqlite_count", {
-      tableName: table,
-      filter: filter || null,
-    });
-    return result.success ? (result.data ?? 0) : 0;
+    await this.ensureInit();
+
+    // EAV 模式
+    if (this.mode === 'eav' && this.eav) {
+      return await this.eav.count(table, filter);
+    }
+
+    // Table 模式
+    let sql = `SELECT COUNT(*) as count FROM ${table}`;
+    const params: unknown[] = [];
+    if (filter && Object.keys(filter).length > 0) {
+      const conditions: string[] = [];
+      for (const [key, value] of Object.entries(filter)) {
+        const cleanKey = key.split('.')[0];
+        conditions.push(`${cleanKey} = ?`);
+        params.push(value);
+      }
+      sql += ` WHERE ${conditions.join(' AND ')}`;
+    }
+    const result = await this.executeSQL<{ count: number }>(sql, params);
+    return result?.count || 0;
   }
 
   /**
@@ -325,10 +401,16 @@ export class SQLiteStorage implements ISQLiteStorage {
    * @returns 是否成功
    */
   async clear(table: string): Promise<boolean> {
-    const result = await this.invoke<boolean>("sqlite_clear_table", {
-      tableName: table,
-    });
-    return result.success ? (result.data ?? false) : false;
+    await this.ensureInit();
+
+    // EAV 模式
+    if (this.mode === 'eav' && this.eav) {
+      return await this.eav.clear(table);
+    }
+
+    // Table 模式
+    await this.executeSQL(`DELETE FROM ${table}`);
+    return true;
   }
 
   /**
@@ -336,8 +418,125 @@ export class SQLiteStorage implements ISQLiteStorage {
    * @returns 表名数组
    */
   async listTables(): Promise<string[]> {
-    const result = await this.invoke<string[]>("sqlite_list_tables", {});
-    return result.success ? (result.data ?? []) : [];
+    await this.ensureInit();
+
+    // EAV 模式
+    if (this.mode === 'eav' && this.eav) {
+      return await this.eav.listTables();
+    }
+
+    // Table 模式
+    const result = await this.executeSQL<{ name: string }[]>(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+    );
+    return result.map((r) => r.name);
+  }
+
+  // ============== Table 模式特有方法 ==============
+
+  /**
+   * 创建表（仅 Table 模式）
+   * @param tableName 表名
+   * @param columns 列定义
+   */
+  async createTable(tableName: string, columns: string): Promise<void> {
+    await this.executeSQL(`CREATE TABLE IF NOT EXISTS ${tableName} (${columns})`);
+    this.log('Table created:', tableName);
+  }
+
+  /**
+   * 删除表（仅 Table 模式）
+   * @param tableName 表名
+   */
+  async dropTable(tableName: string): Promise<void> {
+    await this.executeSQL(`DROP TABLE IF EXISTS ${tableName}`);
+    this.log('Table dropped:', tableName);
+  }
+
+  /**
+   * 表插入（仅 Table 模式）
+   * @param table 表名
+   * @param data 数据对象
+   * @returns 插入的 ID
+   */
+  async tableInsert(table: string, data: Record<string, unknown>): Promise<number> {
+    const columns = Object.keys(data);
+    const placeholders = columns.map(() => '?').join(', ');
+    const values = columns.map((col) => data[col]);
+
+    const sql = `INSERT INTO ${table} (${columns.join(', ')}) VALUES (${placeholders})`;
+    await this.executeSQL(sql, values);
+
+    const result = await this.executeSQL<{ lastInsertRowid: number }>(
+      'SELECT last_insert_rowid() as lastInsertRowid'
+    );
+    return result.lastInsertRowid;
+  }
+
+  /**
+   * 表更新（仅 Table 模式）
+   * @param table 表名
+   * @param data 更新数据
+   * @param where WHERE 子句
+   * @param params 参数
+   * @returns 影响的行数
+   */
+  async tableUpdate(
+    table: string,
+    data: Record<string, unknown>,
+    where: string,
+    params: unknown[] = []
+  ): Promise<number> {
+    const columns = Object.keys(data);
+    const setClause = columns.map((col) => `${col} = ?`).join(', ');
+    const values = columns.map((col) => data[col]);
+
+    const sql = `UPDATE ${table} SET ${setClause} WHERE ${where}`;
+    await this.executeSQL(sql, [...values, ...params]);
+
+    const result = await this.executeSQL<{ changes: number }>('SELECT changes() as changes');
+    return result.changes;
+  }
+
+  /**
+   * 表删除（仅 Table 模式）
+   * @param table 表名
+   * @param where WHERE 子句
+   * @param params 参数
+   * @returns 影响的行数
+   */
+  async tableDelete(table: string, where: string, params: unknown[] = []): Promise<number> {
+    const sql = `DELETE FROM ${table} WHERE ${where}`;
+    await this.executeSQL(sql, params);
+
+    const result = await this.executeSQL<{ changes: number }>('SELECT changes() as changes');
+    return result.changes;
+  }
+
+  /**
+   * 执行原生 SQL
+   * @param sql SQL 语句
+   * @param params 参数
+   */
+  async execute<T = unknown>(sql: string, params: unknown[] = []): Promise<T> {
+    return this.executeSQL<T>(sql, params);
+  }
+
+  /**
+   * 执行事务
+   * @param statements SQL 语句数组
+   */
+  async transaction(statements: Array<{ sql: string; params?: unknown[] }>): Promise<void> {
+    await this.executeSQL('BEGIN TRANSACTION');
+    try {
+      for (const stmt of statements) {
+        await this.executeSQL(stmt.sql, stmt.params || []);
+      }
+      await this.executeSQL('COMMIT');
+    } catch (error) {
+      await this.executeSQL('ROLLBACK');
+      throw error;
+    }
   }
 
   // ============== 便捷方法（兼容 localStorage 风格） ==============
@@ -405,7 +604,12 @@ export function createSQLiteStorage(
   bridge: SQLiteBridge,
   config?: SQLiteStorageConfig,
 ): SQLiteStorage {
-  const storage = new SQLiteStorage(bridge, config?.appId, config?.dbName);
+  const storage = new SQLiteStorage(
+    bridge,
+    config?.appId,
+    config?.dbName,
+    config?.mode || 'eav'
+  );
   if (config?.debug) {
     storage.setDebug(true);
   }

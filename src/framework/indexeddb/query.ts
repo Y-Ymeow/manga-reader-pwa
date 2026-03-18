@@ -31,8 +31,10 @@ export class QueryBuilder<T> {
       results = this.applyFilter(results, options.where);
     }
 
-    // 应用排序
-    if (options.orderBy) {
+    // 应用排序（支持 sort 和 orderBy）
+    if (options.sort) {
+      results = this.applySortFromSortOption(results, options.sort);
+    } else if (options.orderBy) {
       results = this.applySort(results, options.orderBy);
     }
 
@@ -223,6 +225,71 @@ export class QueryBuilder<T> {
       }
       return 0;
     });
+  }
+
+  /**
+   * 应用排序（从 sort 选项）
+   */
+  private applySortFromSortOption(
+    records: T[],
+    sort: string | { field: string; order?: 'asc' | 'desc' } | Array<{ field: string; order?: 'asc' | 'desc' }>
+  ): T[] {
+    // 字符串简写
+    if (typeof sort === 'string') {
+      return [...records].sort((a, b) => {
+        const aVal = (a as Record<string, unknown>)[sort];
+        const bVal = (b as Record<string, unknown>)[sort];
+        return this.compareValues(aVal, bVal);
+      });
+    }
+
+    // 单字段对象
+    if (!Array.isArray(sort)) {
+      const { field, order = 'asc' } = sort;
+      return [...records].sort((a, b) => {
+        const aVal = (a as Record<string, unknown>)[field];
+        const bVal = (b as Record<string, unknown>)[field];
+        const comparison = this.compareValues(aVal, bVal);
+        return order === 'asc' ? comparison : -comparison;
+      });
+    }
+
+    // 多字段数组
+    return [...records].sort((a, b) => {
+      for (const { field, order = 'asc' } of sort) {
+        const aVal = (a as Record<string, unknown>)[field];
+        const bVal = (b as Record<string, unknown>)[field];
+        const comparison = this.compareValues(aVal, bVal);
+        if (comparison !== 0) {
+          return order === 'asc' ? comparison : -comparison;
+        }
+      }
+      return 0;
+    });
+  }
+
+  /**
+   * 比较两个值
+   */
+  private compareValues(aVal: unknown, bVal: unknown): number {
+    // 处理空值
+    if (aVal === undefined || aVal === null) {
+      return bVal !== undefined && bVal !== null ? -1 : 0;
+    }
+    if (bVal === undefined || bVal === null) {
+      return 1;
+    }
+
+    // 比较值
+    if (typeof aVal === 'string' && typeof bVal === 'string') {
+      return aVal.localeCompare(bVal);
+    } else if (aVal instanceof Date && bVal instanceof Date) {
+      return aVal.getTime() - bVal.getTime();
+    } else if (typeof aVal === 'number' && typeof bVal === 'number') {
+      return aVal - bVal;
+    } else {
+      return String(aVal).localeCompare(String(bVal));
+    }
   }
 
   /**

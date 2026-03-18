@@ -99,7 +99,13 @@ export class UnifiedModel<T extends ModelData> {
     return await this.idbModel.findOne(options);
   }
 
-  async findMany(options?: { where?: Partial<T>; orderBy?: Record<string, 'asc' | 'desc'>; limit?: number; offset?: number }): Promise<T[]> {
+  async findMany(options?: {
+    where?: Partial<T>;
+    orderBy?: Record<string, 'asc' | 'desc'>;
+    sort?: string | { field: string; order?: 'asc' | 'desc' } | Array<{ field: string; order?: 'asc' | 'desc' }>;
+    limit?: number;
+    offset?: number;
+  }): Promise<T[]> {
     if (this.isSQLite) {
       const model = await this.getSQLiteModel();
       if (model) {
