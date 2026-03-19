@@ -3,23 +3,27 @@
  * 在 Tauri 环境使用 SQLite，浏览器环境使用 IndexedDB
  */
 
-import { Model, type ModelData } from '../framework/indexeddb';
-import { SQLiteModel } from '../framework/sqlite';
-import { isTauri } from '../fs/storage-adapter';
-import { getGlobalBridge, createSQLiteDB } from '../framework/sqlite';
+import { Model, type ModelData } from "../framework/indexeddb";
+import { SQLiteModel } from "../framework/sqlite";
+import { isTauri } from "../fs/storage-adapter";
+import { getGlobalBridge, createSQLiteDB } from "../framework/sqlite";
 
 /**
  * 创建 SQLite 模型实例
  */
 function createSQLiteModelInstance<T extends ModelData>(
-  tableName: string
+  tableName: string,
 ): SQLiteModel<T> {
   const bridge = getGlobalBridge();
   if (!bridge) {
-    throw new Error('SQLite bridge not initialized');
+    throw new Error("SQLite bridge not initialized");
   }
-  const db = createSQLiteDB(bridge, { name: 'manga-reader', debug: false });
-  return new SQLiteModel<T>(db.getStorage(), tableName, { tableName, primaryKey: 'id', enableChangeLog: false });
+  const db = createSQLiteDB(bridge, { name: "manga-reader", debug: false });
+  return new SQLiteModel<T>(db.getStorage(), tableName, {
+    tableName,
+    primaryKey: "id",
+    enableChangeLog: false,
+  });
 }
 
 /**
@@ -56,7 +60,7 @@ export class UnifiedModel<T extends ModelData> {
       try {
         this.sqliteModel = createSQLiteModelInstance<T>(this.tableName);
       } catch (e) {
-        console.warn('[UnifiedModel] Failed to create SQLite model:', e);
+        console.warn("[UnifiedModel] Failed to create SQLite model:", e);
         return null;
       }
     }
@@ -86,14 +90,15 @@ export class UnifiedModel<T extends ModelData> {
   async findOne(options: { where: Partial<T> }): Promise<T | null> {
     if (this.isSQLite) {
       const model = await this.getSQLiteModel();
+      console.log("[findOne] SQLite Model:", model);
       if (model) {
         const where = options.where as Record<string, unknown>;
         const id = where.id;
         if (id !== undefined) {
           return await model.findById(String(id));
         }
-        const results = await model.findMany({ where });
-        return results.length > 0 ? results[0] : null;
+        const results = await model.findOne({ where });
+        return results ?? null;
       }
     }
     return await this.idbModel.findOne(options);
@@ -101,8 +106,11 @@ export class UnifiedModel<T extends ModelData> {
 
   async findMany(options?: {
     where?: Partial<T>;
-    orderBy?: Record<string, 'asc' | 'desc'>;
-    sort?: string | { field: string; order?: 'asc' | 'desc' } | Array<{ field: string; order?: 'asc' | 'desc' }>;
+    orderBy?: Record<string, "asc" | "desc">;
+    sort?:
+      | string
+      | { field: string; order?: "asc" | "desc" }
+      | Array<{ field: string; order?: "asc" | "desc" }>;
     limit?: number;
     offset?: number;
   }): Promise<T[]> {
@@ -132,7 +140,10 @@ export class UnifiedModel<T extends ModelData> {
         return await model.update(String(id), data);
       }
     }
-    return await this.idbModel.update(typeof id === 'number' ? id : Number(id), data);
+    return await this.idbModel.update(
+      typeof id === "number" ? id : Number(id),
+      data,
+    );
   }
 
   async delete(id: string | number): Promise<boolean> {
@@ -142,10 +153,13 @@ export class UnifiedModel<T extends ModelData> {
         return await model.delete(String(id));
       }
     }
-    return await this.idbModel.delete(typeof id === 'number' ? id : Number(id));
+    return await this.idbModel.delete(typeof id === "number" ? id : Number(id));
   }
 
-  async updateMany(where: Partial<T>, data: Partial<T>): Promise<{ updated: number; failed: number }> {
+  async updateMany(
+    where: Partial<T>,
+    data: Partial<T>,
+  ): Promise<{ updated: number; failed: number }> {
     if (this.isSQLite) {
       const model = await this.getSQLiteModel();
       if (model) {
@@ -182,10 +196,10 @@ export class UnifiedModel<T extends ModelData> {
     if (this.isSQLite) {
       const model = await this.getSQLiteModel();
       if (model) {
-        return await model.count(where ? { where } as any : undefined);
+        return await model.count(where ? ({ where } as any) : undefined);
       }
     }
-    return await this.idbModel.count(where ? { where } as any : undefined);
+    return await this.idbModel.count(where ? ({ where } as any) : undefined);
   }
 
   async exists(id: string | number): Promise<boolean> {

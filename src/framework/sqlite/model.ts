@@ -1,22 +1,22 @@
 /**
  * SQLite Model
  * ORM 模型基类 - 基于 SQLite EAV 存储
- * 
+ *
  * @example
  * ```typescript
  * import { SQLiteModel, createSQLiteModel } from './sqlite';
- * 
+ *
  * // 定义模型
  * const User = new SQLiteModel(storage, 'users', {
  *   primaryKey: 'id'
  * });
- * 
+ *
  * // CRUD 操作
  * const user = await User.create({ id: 'user1', name: '张三', age: 25 });
  * const found = await User.findById('user1');
  * const updated = await User.update('user1', { age: 26 });
  * await User.delete('user1');
- * 
+ *
  * // 查询
  * const users = await User.findMany({
  *   where: { age: { $gte: 18 } },
@@ -35,8 +35,8 @@ import type {
   SQLiteBatchResult,
   SQLiteChangeLog,
   SQLiteQueryOptions,
-} from './types';
-import { SQLiteQueryBuilder } from './query';
+} from "./types";
+import { SQLiteQueryBuilder } from "./query";
 
 /**
  * SQLite 模型基类
@@ -60,11 +60,11 @@ export class SQLiteModel<T extends SQLiteModelData = SQLiteModelData> {
   constructor(
     storage: ISQLiteStorage,
     tableName: string,
-    config?: SQLiteModelConfig
+    config?: SQLiteModelConfig,
   ) {
     this.storage = storage;
     this.tableName = tableName;
-    this.primaryKey = config?.primaryKey || 'dataId';
+    this.primaryKey = config?.primaryKey || "dataId";
     this.enableChangeLog = config?.enableChangeLog ?? false;
   }
 
@@ -72,10 +72,10 @@ export class SQLiteModel<T extends SQLiteModelData = SQLiteModelData> {
    * 日志变更
    */
   protected async logChange(
-    action: 'create' | 'update' | 'delete',
+    action: "create" | "update" | "delete",
     id: string,
     oldData?: T,
-    newData?: T
+    newData?: T,
   ): Promise<void> {
     if (!this.enableChangeLog) return;
 
@@ -88,7 +88,11 @@ export class SQLiteModel<T extends SQLiteModelData = SQLiteModelData> {
         newData: newData as Record<string, unknown>,
         timestamp: Date.now(),
       };
-      await this.storage.upsert('_changelog', `${this.tableName}:${id}`, log as unknown as Record<string, unknown>);
+      await this.storage.upsert(
+        "_changelog",
+        `${this.tableName}:${id}`,
+        log as unknown as Record<string, unknown>,
+      );
     } catch {
       // 日志失败不影响主流程
     }
@@ -126,8 +130,11 @@ export class SQLiteModel<T extends SQLiteModelData = SQLiteModelData> {
     // 还原 Date 类型（如果字段名包含 Date 或 At 后缀）
     for (const [key, value] of Object.entries(deserialized)) {
       if (
-        typeof value === 'string' &&
-        (key.endsWith('At') || key.endsWith('Date') || key === 'createdAt' || key === 'updatedAt')
+        typeof value === "string" &&
+        (key.endsWith("At") ||
+          key.endsWith("Date") ||
+          key === "createdAt" ||
+          key === "updatedAt")
       ) {
         const date = new Date(value);
         if (!isNaN(date.getTime())) {
@@ -166,14 +173,18 @@ export class SQLiteModel<T extends SQLiteModelData = SQLiteModelData> {
     serialized.updatedAt = now;
 
     // 保存
-    const success = await this.storage.upsert(this.tableName, dataId, serialized);
+    const success = await this.storage.upsert(
+      this.tableName,
+      dataId,
+      serialized,
+    );
     if (!success) {
-      throw new Error('Failed to create record');
+      throw new Error("Failed to create record");
     }
 
     // 记录日志
     const result = { ...serialized, [this.primaryKey]: dataId } as T;
-    await this.logChange('create', dataId, undefined, result);
+    await this.logChange("create", dataId, undefined, result);
 
     return this.deserialize(result);
   }
@@ -214,12 +225,31 @@ export class SQLiteModel<T extends SQLiteModelData = SQLiteModelData> {
 
   /**
    * 查找单条记录
-   * @param dataId 记录 ID
+   * @param dataIdOrOptions 记录 ID 或查询选项
    * @returns 记录或 null
    */
-  async findOne(dataId: string): Promise<T | null> {
-    const record = await this.storage.findOne<T>(this.tableName, dataId);
-    return record ? this.deserialize(record.data) : null;
+  async findOne(
+    dataIdOrOptions: string | { where: SQLiteModelQueryOptions["where"] },
+  ): Promise<T | null> {
+    // 如果是字符串，直接按 dataId 查找
+    if (typeof dataIdOrOptions === "string") {
+      const record = await this.storage.findOne<T>(
+        this.tableName,
+        dataIdOrOptions,
+      );
+      return record ? this.deserialize(record.data) : null;
+    }
+
+    // 如果是对象，使用 where 条件查找
+    const options = dataIdOrOptions;
+    const queryOptions = this.buildQueryOptions(options);
+    const records = await this.storage.find<T>(this.tableName, queryOptions);
+
+    if (records.length === 0) {
+      return null;
+    }
+
+    return this.deserialize(records[0].data);
   }
 
   /**
@@ -269,12 +299,12 @@ export class SQLiteModel<T extends SQLiteModelData = SQLiteModelData> {
     // 保存
     const success = await this.storage.upsert(this.tableName, id, serialized);
     if (!success) {
-      throw new Error('Failed to update record');
+      throw new Error("Failed to update record");
     }
 
     // 记录日志
     const result = { ...serialized, [this.primaryKey]: id } as T;
-    await this.logChange('update', id, oldData, result);
+    await this.logChange("update", id, oldData, result);
 
     return this.deserialize(result);
   }
@@ -286,8 +316,8 @@ export class SQLiteModel<T extends SQLiteModelData = SQLiteModelData> {
    * @returns 更新统计
    */
   async updateMany(
-    where: SQLiteModelQueryOptions['where'],
-    data: Partial<T>
+    where: SQLiteModelQueryOptions["where"],
+    data: Partial<T>,
   ): Promise<{ updated: number; failed: number }> {
     const records = await this.findMany({ where });
     let updated = 0;
@@ -318,7 +348,7 @@ export class SQLiteModel<T extends SQLiteModelData = SQLiteModelData> {
     const success = await this.storage.delete(this.tableName, id);
 
     if (success && oldData) {
-      await this.logChange('delete', id, oldData, undefined);
+      await this.logChange("delete", id, oldData, undefined);
     }
 
     return success;
@@ -329,7 +359,9 @@ export class SQLiteModel<T extends SQLiteModelData = SQLiteModelData> {
    * @param where 查询条件
    * @returns 删除统计
    */
-  async deleteMany(where: SQLiteModelQueryOptions['where']): Promise<{ deleted: number; failed: number }> {
+  async deleteMany(
+    where: SQLiteModelQueryOptions["where"],
+  ): Promise<{ deleted: number; failed: number }> {
     const records = await this.findMany({ where });
     let deleted = 0;
     let failed = 0;
@@ -359,7 +391,7 @@ export class SQLiteModel<T extends SQLiteModelData = SQLiteModelData> {
    * @param where 查询条件
    * @returns 记录数
    */
-  async count(where?: SQLiteModelQueryOptions['where']): Promise<number> {
+  async count(where?: SQLiteModelQueryOptions["where"]): Promise<number> {
     if (!where) {
       return this.storage.count(this.tableName);
     }
@@ -400,22 +432,25 @@ export class SQLiteModel<T extends SQLiteModelData = SQLiteModelData> {
   /**
    * 构建查询选项
    */
-  protected buildQueryOptions(options: SQLiteModelQueryOptions): SQLiteQueryOptions {
+  protected buildQueryOptions(
+    options: SQLiteModelQueryOptions,
+  ): SQLiteQueryOptions {
     const queryOptions: SQLiteQueryOptions = {};
 
     if (options.where) {
-      queryOptions.filter = this.transformWhere(options.where);
+      // 直接传递 where，让 storage 层处理
+      (queryOptions as any).where = options.where;
     }
 
     if (options.orderBy) {
-      if (typeof options.orderBy === 'string') {
+      if (typeof options.orderBy === "string") {
         queryOptions.orderBy = options.orderBy;
       } else {
         // 取第一个排序字段
         const [field, direction] = Object.entries(options.orderBy)[0] || [];
         if (field) {
           queryOptions.orderBy = field;
-          queryOptions.desc = direction === 'desc';
+          queryOptions.desc = direction === "desc";
         }
       }
     }
@@ -434,11 +469,17 @@ export class SQLiteModel<T extends SQLiteModelData = SQLiteModelData> {
   /**
    * 转换 where 条件为 filter 格式
    */
-  protected transformWhere(where: Record<string, unknown>): Record<string, unknown> {
+  protected transformWhere(
+    where: Record<string, unknown>,
+  ): Record<string, unknown> {
     const filter: Record<string, unknown> = {};
 
     for (const [key, value] of Object.entries(where)) {
-      if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+      if (
+        value !== null &&
+        typeof value === "object" &&
+        !Array.isArray(value)
+      ) {
         // 已经是操作符格式
         filter[key] = value;
       } else {
@@ -474,7 +515,7 @@ export class SQLiteModel<T extends SQLiteModelData = SQLiteModelData> {
 export function createSQLiteModel<T extends SQLiteModelData>(
   storage: ISQLiteStorage,
   tableName: string,
-  config?: SQLiteModelConfig
+  config?: SQLiteModelConfig,
 ): SQLiteModel<T> {
   return new SQLiteModel<T>(storage, tableName, config);
 }

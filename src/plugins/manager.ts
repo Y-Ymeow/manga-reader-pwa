@@ -463,9 +463,10 @@ export async function processImageLoad(
   blobUrl?: string;
 }> {
   const plugin = await getPlugin(pluginKey);
+  console.log("[processImageLoad] Plugin:", plugin);
   if (!plugin?.comic?.onImageLoad) {
     // 没有 onImageLoad，直接返回原URL
-    return { url };
+    return { url: getImageProxyUrl(url) };
   }
 
   try {
@@ -477,7 +478,7 @@ export async function processImageLoad(
     );
 
     if (!config) {
-      return { url };
+      return { url: getImageProxyUrl(url) };
     }
 
     // 处理后的URL（可能被插件修改）
@@ -488,6 +489,7 @@ export async function processImageLoad(
 
     // 如果有 headers 但没有 modifyImage，直接返回代理 URL，不需要下载转换
     if (config.headers && !config.modifyImage) {
+      console.log("[processImageLoad] Returning proxy URL:", proxyUrl);
       return {
         url: proxyUrl,
         headers: config.headers,
@@ -547,7 +549,7 @@ export async function processImageLoad(
           const blobUrl = URL.createObjectURL(modifiedBlob);
 
           return {
-            url: finalUrl,
+            url: proxyUrl,
             headers: config.headers,
             blobUrl,
           };
@@ -564,10 +566,10 @@ export async function processImageLoad(
     }
 
     // 没有 modifyImage 和 headers，只返回 URL
-    return { url: proxyUrl };
+    return { url: proxyUrl, headers: config.headers };
   } catch (e) {
     console.error("[processImageLoad] Error:", e);
-    return { url };
+    return { url: getImageProxyUrl(url) };
   }
 }
 

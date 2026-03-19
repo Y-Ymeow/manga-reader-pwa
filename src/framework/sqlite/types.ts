@@ -48,8 +48,10 @@ export interface EAVRecord<T = Record<string, unknown>> {
  * 查询选项
  */
 export interface SQLiteQueryOptions {
-  /** 过滤条件 */
+  /** 过滤条件（旧版兼容） */
   filter?: Record<string, unknown>;
+  /** 过滤条件（新版，支持操作符） */
+  where?: Record<string, unknown>;
   /** 排序字段（旧版兼容） */
   orderBy?: string;
   /** 是否降序（旧版兼容） */
@@ -66,8 +68,10 @@ export interface SQLiteQueryOptions {
  * 查询选项（通用）
  */
 export interface QueryOptions {
-  /** 过滤条件 */
+  /** 过滤条件（旧版兼容） */
   filter?: Record<string, unknown>;
+  /** 过滤条件（新版，支持操作符） */
+  where?: Record<string, unknown>;
   /** 排序字段（旧版兼容） */
   orderBy?: string;
   /** 是否降序（旧版兼容） */

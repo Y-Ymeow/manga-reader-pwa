@@ -262,15 +262,16 @@ export class EAVStorage {
     `;
     const params: unknown[] = [this.dbName, table];
 
-    // 简单过滤（只支持第一个条件）
-    if (options.filter && Object.keys(options.filter).length > 0) {
-      const [firstKey] = Object.entries(options.filter)[0] || [];
-      if (firstKey) {
-        const attrName = firstKey.split('.')[0];
-        sqlQuery += ` AND d.data_id IN (
-          SELECT data_id FROM pwa_schema_data WHERE attr_name = ?
-        )`;
+    // 处理 where 条件
+    if (options.where && Object.keys(options.where).length > 0) {
+      const conditions: string[] = [];
+      for (const [key, value] of Object.entries(options.where)) {
+        const attrName = key.split('.')[0];
+        conditions.push(`d.data_id IN (SELECT data_id FROM pwa_schema_data WHERE attr_name = ?)`);
         params.push(attrName);
+      }
+      if (conditions.length > 0) {
+        sqlQuery += ` AND ${conditions.join(' AND ')}`;
       }
     }
 

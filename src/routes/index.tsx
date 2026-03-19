@@ -9,7 +9,7 @@ import { Settings } from "@pages/Settings";
 import { Plugins } from "@pages/Plugins";
 import { PluginSettings } from "@pages/PluginSettings";
 import { MangaDetail } from "@pages/MangaDetail";
-import { Reader } from "@pages/Reader";
+import { Reader } from "@pages/Reader/index";
 import { CacheManager } from "@pages/CacheManager";
 import { BottomNav } from "@components/layout/BottomNav";
 import {

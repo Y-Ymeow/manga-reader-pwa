@@ -160,6 +160,18 @@ await eav.delete('users', 'user1');
 await eav.setItem('config.theme', 'dark');
 const theme = await eav.getItem('config.theme');
 await eav.removeItem('config.theme');
+
+// 查询条件（where）
+const activeUsers = await eav.find('users', {
+  where: {
+    status: 'active',
+    age: { $gt: 18, $lt: 60 },
+    role: { $in: ['admin', 'user'] },
+    name: { $contains: 'John' },
+    email: { $startswith: 'admin' },
+  },
+  limit: 10
+});
 ```
 
 ### 使用原生 SQLite 表操作
@@ -241,6 +253,15 @@ import type {
 3. **数据序列化**：自动处理 JSON 序列化，跳过不可序列化的字段（如 FileHandle、Blob）
 4. **EAV 限制**：EAV 模式下，`data` 中的字段无法在 SQL 中直接排序，会在前端处理
 5. **事务支持**：通过 `storage.transaction()` 或 `database.transaction()` 使用
+6. **where 查询条件**：EAV 模式支持以下查询条件：
+   - 简单等值：`{ status: 'active', count: 5 }`
+   - 操作符：`{ age: { $gt: 18, $lt: 60 } }`
+   - 数组 (`$in`): `{ status: ['active', 'pending'] }` 或 `{ status: { $in: ['active', 'pending'] } }`
+   - 包含 (`$contains`): `{ name: { $contains: 'John' } }`
+   - 开头 (`$startswith`): `{ email: { $startswith: 'admin' } }`
+   - 结尾 (`$endswith`): `{ email: { $endswith: '@gmail.com' } }`
+   - 不等于 (`$ne`): `{ status: { $ne: 'deleted' } }`
+   - 支持的操作符：`$eq`, `$ne`, `$gt`, `$gte`, `$lt`, `$lte`, `$in`, `$nin`, `$contains`, `$startswith`, `$endswith`
 
 ## 迁移指南
 
